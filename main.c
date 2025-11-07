@@ -33,7 +33,10 @@
 #define CHANNEL_1 1
 #define CHANNEL_2 2
 
+////////////////////////////////////////////////////////////////////////////////////
 /// Function Prototypes
+
+/// Task functions
 void someTaskHere(void* arg);
 
 /// Helper functions
