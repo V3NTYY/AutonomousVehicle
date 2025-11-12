@@ -51,6 +51,17 @@ typedef enum
   MAX_TASKS
 } task_t;
 
+// Enumerated type for states -- i.e. (move forward, turn left, turn right, etc)
+typedef enum
+{
+  STATE_IDLE,
+  STATE_MOVE_FORWARD,
+  STATE_TURN_LEFT,
+  STATE_TURN_RIGHT,
+  STATE_REVERSE,
+  MAX_STATES
+} state;
+
 // Task Control Block (TCB) structure
 typedef struct
 {
@@ -64,6 +75,9 @@ TCB_t *queue[MAX_TASKS];
 
 // Timer counter -- multiply by TIMER_PERIOD_US to get time in microseconds
 volatile static uint32_t MasterTimerCounter;
+
+// State variable
+volatile static state currentState;
 
 // Hardware instances
 XIntc InterruptController;  // Instance of the Interrupt Controller
@@ -219,6 +233,10 @@ void setupTasks() {
 
 int main(int argc, char const *argv[])
 {
+  // Init timer counter and other variables
+  MasterTimerCounter = 0;
+  currentState = STATE_IDLE;
+
   // Setup the GPIO, Interrupt Controller and Timer
   int status = XST_FAILURE;
   status = platform_init();
@@ -256,5 +274,31 @@ int main(int argc, char const *argv[])
 /// Task implementations
 void taskSupervisor(void *data)
 {
-  // Do some shit here to set individual tasks to ready
+  switch(currentState)
+  {
+    case STATE_IDLE:
+      // Do nothing or maybe sense environment?
+      break;
+
+    case STATE_MOVE_FORWARD:
+      // Go forward
+      break;
+
+    case STATE_TURN_LEFT:
+      // Go left
+      break;
+
+    case STATE_TURN_RIGHT:
+      // Go right
+      break;
+
+    case STATE_REVERSE:
+      // Go backwards
+      break;
+
+    default:
+      // Invalid state go idle silly
+      currentState = STATE_IDLE;
+      break;
+  }
 }
