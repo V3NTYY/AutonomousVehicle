@@ -3,111 +3,258 @@
 /// File: main.c
 /// Created by: Grace Harding, Ben Kensington
 /// Lab 8
+/// Bare-metal approach to micromouse-style robot
 
 ////////////////////////////////////////////////////////////////////////////////////
 /// Includes and Defines
 
-/* FreeRTOS includes. */
-#include "FreeRTOS.h"
-#include "task.h"
-#include "semphr.h"
-/* Xilinx includes. */
-#include "xil_printf.h"
-#include "xparameters.h"
-#include "xgpio.h"
-#include <projdefs.h>
+#include <xil_printf.h>
+#include <xparameters.h>
+#include <xtmrctr.h>
+#include <xtmrctr_l.h>
 #include <xil_exception.h>
-/* Standard library include. */
+#include <xil_printf.h>
+#include <xintc.h>
+#include <xgpio.h>
 #include <stdlib.h>
 
-/// Defines for true/false logic
-#define TRUE 1
-#define FALSE 0
+#define TMRCTR_DEVICE_ID XPAR_TMRCTR_0_DEVICE_ID
+#define TMRCTR_INTERRUPT_ID XPAR_INTC_0_TMRCTR_0_VEC_ID
+#define INTC_DEVICE_ID XPAR_INTC_0_DEVICE_ID
 
-/// Base Address Defines
-#define AXI_GPIO_0_BASE_ADDR 0x40000000 // Button
-#define AXI_GPIO_1_BASE_ADDR 0x40010000 // LED
-#define AXI_GPIO_SOME_ADDR 0x00000000 // TODO: Add more defines based on Vivado hardware addresses
-
-/// Defines for channel numbers
+#define LOAD_VALUE 40624 // ~0.5ms period (0.5000012 closer to actual)
+#define TIMER_PERIOD_US 500 // Timer period in microseconds (500 us = 0.5 ms)
 #define CHANNEL_1 1
 #define CHANNEL_2 2
 
 ////////////////////////////////////////////////////////////////////////////////////
-/// Function Prototypes
+/// Function prototypes
 
-/// Task functions
-void someTaskHere(void* arg);
-
-/// Helper functions
-void initSupervisor();
-void SupervisorTask();
+// Timer Interrupt Service Routine
+void timer_ISR(void *CallBackRef, u8 TmrCtrNumber);
+// Helper functions
+int platform_init();
+void TmrCtrDisableIntr(XIntc *IntcInstancePtr, u16 IntrId);
 void executionFailed();
-int transitionState();
+void setupTasks();
+
+// Tasks
+void taskSupervisor(void *data);
 
 ////////////////////////////////////////////////////////////////////////////////////
-/// State Machine and Variable Initialization
+/// Enums, structs and global variables
 
-/// State Machine
+// Enumerated type for the tasks
 typedef enum
 {
-    SOME_STATE_HERE = 0,
-    ANOTHER_STATE_HERE
-} State;
+  TASK_SUPERVISOR,
+  MAX_TASKS
+} task_t;
 
-/// Hardware instances
-// XGpio btnGpio;                       // Instance of the AXI_GPIO_0
-// XGpio ledGpio;                       // Instance of the AXI_GPIO_1
+// Task Control Block (TCB) structure
+typedef struct
+{
+  void (*taskPtr)(void *);
+  void *taskDataPtr;
+  u8 taskReady;
+} TCB_t;
 
-/// Global variables
-// static volatile int someVarHere = 0;
+// Task queue
+TCB_t *queue[MAX_TASKS];
 
-/// Mutexes
-// SemaphoreHandle_t state_mutex;
-// SemaphoreHandle_t blink_mutex;
+// Timer counter -- multiply by TIMER_PERIOD_US to get time in microseconds
+volatile static uint32_t MasterTimerCounter;
 
-/// FreeRTOS Tasks
-// TaskHandle_t SupervisorTaskHandle = NULL;
+// Hardware instances
+XIntc InterruptController;  // Instance of the Interrupt Controller
+XTmrCtr Timer;              // Instance of the Timer
+XGpio btnGpio;              // Instance of the AXI_GPIO_0
+XGpio ledGpio;              // Instance of the AXI_GPIO_1
 
-////////////////////////////////////////////////////////////////////////////////////
-/// GPIO and etc Initialization
+void timer_ISR(void *CallBackRef, u8 TmrCtrNumber)
+{
+  // Increment system time
+  MasterTimerCounter++; // 1 unit = 0.5ms
 
-void initGPIO() {
-    return;
+  // Get instance of the timer linked to the interrupt
+  XTmrCtr *InstancePtr = (XTmrCtr *)CallBackRef;
+
+  // Check if the timer counter has expired
+  if (XTmrCtr_IsExpired(InstancePtr, TmrCtrNumber))
+    // Queue our supervisor to run
+    queue[TASK_SUPERVISOR]->taskReady = TRUE;
 }
 
 ////////////////////////////////////////////////////////////////////////////////////
-/// Supervisor Task and Initialization
+/// "Finished" functions (from Lab 6)
+int platform_init()
+{
+  int status = XST_FAILURE;
 
-void SupervisorTask(void *arg) {
-    // Infinite loop for supervisor task
-    while(1) {
+  // Initialize the GPIO instances
+  status = XGpio_Initialize(&btnGpio, XPAR_GPIO_0_DEVICE_ID);
+  if (status != XST_SUCCESS)
+  {
+    xil_printf("Failed to initialize GPIO_0! Execution stopped.\n");
+    executionFailed();
+  }
 
-        /// Mutex lock here
+  status = XGpio_Initialize(&ledGpio, XPAR_GPIO_1_DEVICE_ID);
+  if (status != XST_SUCCESS)
+  {
+    xil_printf("Failed to initialize GPIO_1! Execution stopped.\n");
+    executionFailed();
+  }
 
-        /// Switch/FSM logic here
-        // switch(state) { 
-        //     case SOME_TASK_HERE:
-        //         break;
-        // }
+  // Set GPIO_0 CHANNEL 2 as input
+  XGpio_SetDataDirection(&btnGpio, CHANNEL_2, 0xF);
 
-        /// Mutex unlock here
-    }
+  // Set GPIO_1 CHANNEL 1 as output
+  XGpio_SetDataDirection(&ledGpio, CHANNEL_1, 0x0);
+
+  // Initialize the timer counter instance
+  status = XTmrCtr_Initialize(&Timer, TMRCTR_DEVICE_ID);
+  if (status != XST_SUCCESS)
+  {
+    xil_printf("Failed to initialize the timer! Execution stopped.\n");
+    executionFailed();
+  }
+
+  // Verifies the specified timer is setup correctly in hardware/software
+  status = XTmrCtr_SelfTest(&Timer, XTC_TIMER_0);
+  if (status != XST_SUCCESS)
+  {
+    xil_printf("Testing timer operation failed! Execution stopped.\n");
+    executionFailed();
+  }
+
+  // Initialize the interrupt controller instance
+  status = XIntc_Initialize(&InterruptController, INTC_DEVICE_ID);
+  if (status != XST_SUCCESS)
+  {
+    xil_printf("Failed to initialize the interrupt controller! Execution stopped.\n");
+    executionFailed();
+  }
+
+  // Connect a timer handler that will be called when an interrupt occurs
+  status = XIntc_Connect(&InterruptController,
+                         TMRCTR_INTERRUPT_ID,
+                         (XInterruptHandler)XTmrCtr_InterruptHandler,
+                         (void *)&Timer);
+  if (status != XST_SUCCESS)
+  {
+    xil_printf("Failed to connect timer handler! Execution stopped.\n");
+    executionFailed();
+  }
+
+  // Start the interrupt controller
+  status = XIntc_Start(&InterruptController, XIN_REAL_MODE);
+  if (status != XST_SUCCESS)
+  {
+    xil_printf("Failed to start interrupt controller! Execution stopped.\n");
+    executionFailed();
+  }
+
+  // Enable interrupts and the exception table
+  XIntc_Enable(&InterruptController, TMRCTR_INTERRUPT_ID);
+  Xil_ExceptionInit();
+
+  // Register the interrupt controller handler with the exception table.
+  Xil_ExceptionRegisterHandler(XIL_EXCEPTION_ID_INT,
+                               (Xil_ExceptionHandler)XIntc_InterruptHandler,
+                               &InterruptController);
+
+  // Enable exceptions
+  Xil_ExceptionEnable();
+
+  // Set the handler (function pointer) that we want to execute when the
+  // interrupt occurs
+  XTmrCtr_SetHandler(&Timer, timer_ISR, &Timer);
+
+  // Set our timer options (setting TCSR register indirectly through Xil API)
+  u32 timerConfig = XTC_INT_MODE_OPTION |
+                    XTC_DOWN_COUNT_OPTION |
+                    XTC_AUTO_RELOAD_OPTION;
+  XTmrCtr_SetOptions(&Timer, XTC_TIMER_0, timerConfig);
+
+  // Set what value the timer should reset/init to (setting TLR indirectly)
+  XTmrCtr_SetResetValue(&Timer, XTC_TIMER_0, LOAD_VALUE);
+
+  // Start the timer
+  XTmrCtr_Start(&Timer, XTC_TIMER_0);
+
+  return XST_SUCCESS;
+}
+
+void executionFailed()
+{
+  u32 *rgbLedsData = (u32 *)(XPAR_GPIO_1_BASEADDR);
+  *rgbLedsData = RGB_RED; // display all red LEDs if fail state occurs
+
+  // trap the program in an infinite loop
+  while (1);
+}
+
+// Optional demonstration on how to disable interrupt
+void TmrCtrDisableIntr(XIntc *IntcInstancePtr, u16 IntrId)
+{
+  // Disable the interrupt for the timer counter
+  XIntc_Disable(IntcInstancePtr, IntrId);
+
+  return;
+}
+
+////////////////////////////////////////////////////////////////////////////////////
+/// Misc functions
+void setupTasks() {
+  // Task 0: taskSupervisor
+  queue[TASK_CHOOSE] = malloc(sizeof(TCB_t));
+  queue[TASK_CHOOSE]->taskPtr = taskSupervisor;
+  queue[TASK_CHOOSE]->taskDataPtr = NULL;
+  queue[TASK_CHOOSE]->taskReady = FALSE;
 }
 
 ////////////////////////////////////////////////////////////////////////////////////
 /// Main function
 
-int main(void)
+int main(int argc, char const *argv[])
 {
-    /// Initialize directionality for GPIOs/etc...
-    // initGPIO();
+  // Setup the GPIO, Interrupt Controller and Timer
+  int status = XST_FAILURE;
+  status = platform_init();
+  if (status != XST_SUCCESS)
+  {
+    xil_printf("Failed to initialize the platform! Execution stopped.\n");
+    executionFailed();
+  }
 
-    /// Initialize supervisor task/etc...
-    // initSupervisor();
+  // Initialize task queue and all of its tasks
+  setupTasks();
 
-    /// Start FreeRTOS Kernel
-    // vTaskStartScheduler();
+  // Main loop
+  while (1)
+  {
+    // Iterate through task queue, execute 'ready' tasks
+    for (int i = 0; i < MAX_TASKS; i++)
+    {
+      // Execute tasks that are only 'ready'
+      if (queue[i]->taskReady)
+      {
+        // Execute the task
+        (*(queue[i]->taskPtr))(queue[i]->taskDataPtr);
 
-    return 0;
+        // Reset the task ready flag
+        queue[i]->taskReady = 0;
+      }
+    }
+  }
+
+  return 0;
+}
+
+////////////////////////////////////////////////////////////////////////////////////
+/// Task implementations
+void taskSupervisor(void *data)
+{
+  // Do some shit here to set individual tasks to ready
 }
