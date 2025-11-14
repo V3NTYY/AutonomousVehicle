@@ -22,20 +22,35 @@
 #include "xgpio_l.h"
 
 #include "PmodMAXSONAR.h"
+#include "PWM.h"
+#include "PmodDHB1.h"
 
 #define TMRCTR_DEVICE_ID XPAR_TMRCTR_0_DEVICE_ID
 #define TMRCTR_INTERRUPT_ID XPAR_INTC_0_TMRCTR_0_VEC_ID
 #define INTC_DEVICE_ID XPAR_INTC_0_DEVICE_ID
 
-// Defines for MAXSONAR PMOD
+// Vivado Hardware Defines
+#define AXI_GPIO_0_BASEADDR     0x40000000
+#define AXI_GPIO_1_BASEADDR     0x40010000
+#define AXI_GPIO_2_BASEADDR     0x40020000
+#define DHB1_GPIO_BASEADDR      0x44A00000
+#define DHB1_MOTOR_FB_BASEADDR  0x44A10000
+#define DHB1_PWM_BASEADDR       0x44A20000
+
+// Defines? for MAXSONAR PMOD
 #define PMOD_SONAR0_BASEADDR XPAR_PMOD_DUAL_MAXSONAR_0_SONAR0_BASEADDR
 #define PMOD_SONAR1_BASEADDR XPAR_PMOD_DUAL_MAXSONAR_0_SONAR1_BASEADDR
 
-// Defines for LS1 PMOD
+// Defines? for LS1 PMOD
 #define PMOD_LS1_BASEADDR XPAR_AXI_GPIO_PMOD_LS1_BASEADDR
 
 #define M1_CHANNEL 1
 #define M2_CHANNEL 2
+
+/// Note:
+/// JA = Pmod LS1
+/// JB = Pmod MAXSONAR, Channel 1 = Sonar 0, Channel 2 = Sonar 1
+/// JD = Pmod DHB1
 
 // PWM Defines
 #define PWM_PERIOD 0x00029000 // 2ms
