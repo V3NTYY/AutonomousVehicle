@@ -17,12 +17,7 @@
 #include <xintc.h>
 #include <xgpio.h>
 #include <stdlib.h>
-#include "xil_cache.h"
-#include "xgpio.h"
-#include "xgpio_l.h"
-
 #include "PmodMAXSONAR.h"
-#include "artyBotLib.h"
 
 #define TMRCTR_DEVICE_ID XPAR_TMRCTR_0_DEVICE_ID
 #define TMRCTR_INTERRUPT_ID XPAR_INTC_0_TMRCTR_0_VEC_ID
@@ -31,18 +26,6 @@
 // Defines for MAXSONAR PMOD
 #define PMOD_SONAR0_BASEADDR XPAR_PMOD_DUAL_MAXSONAR_0_SONAR0_BASEADDR
 #define PMOD_SONAR1_BASEADDR XPAR_PMOD_DUAL_MAXSONAR_0_SONAR1_BASEADDR
-
-// Defines for LS1 PMOD
-#define PMOD_LS1_BASEADDR XPAR_AXI_GPIO_PMOD_LS1_BASEADDR
-
-#define M1_CHANNEL 1
-#define M2_CHANNEL 2
-
-// PWM Defines
-#define PWM_PERIOD 0x00029000 // 2ms
-#define PWM_DUTY 0x00014800   // 50% duty cycle
-#define PWM_M1 0
-#define PWM_M2 1
 
 #ifdef __MICROBLAZE__
 #define CLK_FREQ XPAR_CPU_M_AXI_DP_FREQ_HZ
@@ -54,11 +37,6 @@
 #define TIMER_PERIOD_US 500 // Timer period in microseconds (500 us = 0.5 ms)
 #define CHANNEL_1 1
 #define CHANNEL_2 2
-
-/// Remove me or test me ///
-XGpio DHB1_GPIO;
-PmodDHB1 motor;
-/// Remove me or test me ///
 
 ////////////////////////////////////////////////////////////////////////////////////
 /// Function prototypes
@@ -266,7 +244,6 @@ void setupTasks() {
 
 int main(int argc, char const *argv[])
 {
-
   // Init timer counter and other variables
   MasterTimerCounter = 0;
   currentState = STATE_IDLE;
