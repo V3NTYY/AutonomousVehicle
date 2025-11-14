@@ -22,7 +22,6 @@
 #include "xgpio_l.h"
 
 #include "PmodMAXSONAR.h"
-#include "artyBotLib.h"
 
 #define TMRCTR_DEVICE_ID XPAR_TMRCTR_0_DEVICE_ID
 #define TMRCTR_INTERRUPT_ID XPAR_INTC_0_TMRCTR_0_VEC_ID
@@ -47,7 +46,7 @@
 #ifdef __MICROBLAZE__
 #define CLK_FREQ XPAR_CPU_M_AXI_DP_FREQ_HZ
 #else
-#define CLK_FREQ 83333333 // FCLK0 frequency not found in xparameters.h
+#define CLK_FREQ 81247000 // FCLK0 frequency not found in xparameters.h
 #endif
 
 #define LOAD_VALUE 40624 // ~0.5ms period (0.5000012 closer to actual)
