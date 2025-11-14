@@ -49,10 +49,10 @@
 #define Dual_MAXSONAR_0_BASEADDR  0x44A30000
 
 // PWM Defines
-#define PWM_PERIOD 0x00029000 // 2ms
-#define PWM_DUTY 0x00014800   // 50% duty cycle
-#define PWM_M1 0
-#define PWM_M2 1
+#define PWM_PERIOD  0x00029000   // 2ms
+#define PWM_DUTY    0x00014800   // 50% duty cycle
+#define PWM_M1      0
+#define PWM_M2      1
 
 // Clock frequency define (may be inaccurate! I don't think 8124700 is exactly the Arty's clock)
 #ifdef __MICROBLAZE__
@@ -62,20 +62,20 @@
 #endif
 
 // Timer and load value defines
-#define LOAD_VALUE 40624 // ~0.5ms period (0.5000012 closer to actual)
-#define TIMER_PERIOD_US 500 // Timer period in microseconds (500 us = 0.5 ms)
+#define LOAD_VALUE      40624 // ~0.5ms period (0.5000012 closer to actual)
+#define TIMER_PERIOD_US 500   // Timer period in microseconds (500 us = 0.5 ms)
 
 // Interrupt and timer ID defines
-#define TMRCTR_DEVICE_ID XPAR_TMRCTR_0_DEVICE_ID
+#define TMRCTR_DEVICE_ID    XPAR_TMRCTR_0_DEVICE_ID
 #define TMRCTR_INTERRUPT_ID XPAR_INTC_0_TMRCTR_0_VEC_ID
-#define INTC_DEVICE_ID XPAR_INTC_0_DEVICE_ID
+#define INTC_DEVICE_ID      XPAR_INTC_0_DEVICE_ID
 
 ////////////////////////////////////////////////////////////////////////////////////
 /// TEST FUNCTIONS
 
 void testInfrared() {
   // Get reference infrared sensor registers
-  volatile u32 *InfraredData = (u32 *)LS1_BASEADDR + XGPIO_DATA_OFFSET;
+  volatile u32 *InfraredData =        (u32 *)LS1_BASEADDR + XGPIO_DATA_OFFSET;
 	volatile u32 *InfraredTristateReg = (u32 *)LS1_BASEADDR + XGPIO_TRI_OFFSET;
 
 	*InfraredTristateReg = 0xF;
