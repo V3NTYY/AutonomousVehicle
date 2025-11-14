@@ -3,7 +3,7 @@
 /// File: main.c
 /// Created by: Grace Harding, Ben Kensington
 /// Lab 8
-/// Bare-metal approach to micromouse-style robot
+/// Bare-metal approach to follow-the-line robot
 
 ////////////////////////////////////////////////////////////////////////////////////
 /// Includes and Defines
@@ -31,13 +31,13 @@
 /// JD = Pmod DHB1
 
 // Infrared Sensor Defines
-#define LS1_BASEADDR  XPAR_AXI_GPIO_PMOD_LS1_BASEADDR // Note: this may be inaccurate!
-#define IR_L_SENSOR   0x1
-#define IR_R_SENSOR   0x2
+#define LS1_BASEADDR              XPAR_AXI_GPIO_PMOD_LS1_BASEADDR // Note: this may be inaccurate!
+#define IR_L_SENSOR               0x1
+#define IR_R_SENSOR               0x2
 
 // Sonar Sensor Defines -- Note: may be inaccurate!
-#define PMOD_SONAR0_BASEADDR XPAR_PMOD_DUAL_MAXSONAR_0_SONAR0_BASEADDR
-#define PMOD_SONAR1_BASEADDR XPAR_PMOD_DUAL_MAXSONAR_0_SONAR1_BASEADDR
+#define PMOD_SONAR0_BASEADDR      XPAR_PMOD_DUAL_MAXSONAR_0_SONAR0_BASEADDR
+#define PMOD_SONAR1_BASEADDR      XPAR_PMOD_DUAL_MAXSONAR_0_SONAR1_BASEADDR
 
 // Vivado Hardware Defines
 #define AXI_GPIO_0_BASEADDR       0x40000000
