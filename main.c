@@ -96,14 +96,34 @@ void testSonar() {
   // Initialize sonar instances
   PmodMAXSONAR sonar0;
   PmodMAXSONAR sonar1;
-  MAXSONAR_Init(&sonar0, PMOD_SONAR0_BASEADDR);
-  MAXSONAR_Init(&sonar1, PMOD_SONAR1_BASEADDR);
+  MAXSONAR_begin(&sonar0, PMOD_SONAR0_BASEADDR, CLK_FREQ);
+  MAXSONAR_begin(&sonar1, PMOD_SONAR1_BASEADDR, CLK_FREQ);
 
   while (1)
   {
     u16 distance0 = MAXSONAR_GetDistance(&sonar0);
     u16 distance1 = MAXSONAR_GetDistance(&sonar1);
     xil_printf("Sonar0: %d cm, Sonar1: %d cm\r", distance0, distance1);
+  }
+}
+
+void testMotor() {
+  // Initialize PWM instance
+  PWM pwm;
+  PWM_Initialize(&pwm, DHB1_PWM_BASEADDR);
+
+  // Set PWM period and duty cycle for both motors
+  PWM_SetPeriod(&pwm, PWM_M1, PWM_PERIOD);
+  PWM_SetPeriod(&pwm, PWM_M2, PWM_PERIOD);
+  PWM_SetDutyCycle(&pwm, PWM_M1, PWM_DUTY);
+  PWM_SetDutyCycle(&pwm, PWM_M2, PWM_DUTY);
+
+  // Enable both motors
+  PWM_Enable(&pwm, PWM_M1);
+  PWM_Enable(&pwm, PWM_M2);
+
+  while (1) {
+    // do nothing
   }
 }
 
@@ -122,6 +142,7 @@ void setupTasks();
 
 // Tasks
 void taskSupervisor(void *data);
+void taskSonar(void *data);
 
 ////////////////////////////////////////////////////////////////////////////////////
 /// Enums, structs and global variables
@@ -130,6 +151,7 @@ void taskSupervisor(void *data);
 typedef enum
 {
   TASK_SUPERVISOR,
+  TASK_SONAR,
   MAX_TASKS
 } task_t;
 
@@ -300,10 +322,16 @@ void TmrCtrDisableIntr(XIntc *IntcInstancePtr, u16 IntrId)
 /// Misc functions
 void setupTasks() {
   // Task 0: taskSupervisor
-  queue[TASK_CHOOSE] = malloc(sizeof(TCB_t));
-  queue[TASK_CHOOSE]->taskPtr = taskSupervisor;
-  queue[TASK_CHOOSE]->taskDataPtr = NULL;
-  queue[TASK_CHOOSE]->taskReady = FALSE;
+  queue[TASK_SUPERVISOR] = malloc(sizeof(TCB_t));
+  queue[TASK_SUPERVISOR]->taskPtr = taskSupervisor;
+  queue[TASK_SUPERVISOR]->taskDataPtr = NULL;
+  queue[TASK_SUPERVISOR]->taskReady = FALSE;
+
+  // Task 1: taskSonar
+  queue[TASK_SONAR] = malloc(sizeof(TCB_t));
+  queue[TASK_SONAR]->taskPtr = taskSonar;
+  queue[TASK_SONAR]->taskDataPtr = NULL;
+  queue[TASK_SONAR]->taskReady = TRUE;
 }
 
 ////////////////////////////////////////////////////////////////////////////////////
@@ -351,12 +379,13 @@ int main(int argc, char const *argv[])
 
 ////////////////////////////////////////////////////////////////////////////////////
 /// Task implementations
-void taskSupervisor(void *data)
-{
+
+/// Supervisor task
+void taskSupervisor(void *data) {
   switch(currentState)
   {
     case STATE_IDLE:
-      // Add more states!
+      queue[TASK_SONAR]->taskReady = TRUE; // Start sonar task
       break;
 
     default:
@@ -364,4 +393,9 @@ void taskSupervisor(void *data)
       currentState = STATE_IDLE;
       break;
   }
+}
+
+/// Sonar measurement task
+void taskSonar(void *data) {
+  testSonar();
 }
