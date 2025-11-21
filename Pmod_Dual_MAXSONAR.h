@@ -26,7 +26,7 @@
 typedef struct {
   u32 BaseAddress;
   u32 ClockFreq;
-  u32 IsReady = 0;
+  u32 IsReady;
 } PMOD_DUAL_MAXSONAR;
 
 /***************** Macros (Inline Functions) Definitions *******************/

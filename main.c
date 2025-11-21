@@ -21,32 +21,28 @@
 #include "xgpio.h"
 #include "xgpio_l.h"
 
-#include "PmodMAXSONAR.h"
+#include "Pmod_Dual_MAXSONAR.h"
 #include "PWM.h"
-#include "PmodDHB1.h"
+#include "Pmod_DHB1.h"
 
 /// Note on Pmod connections:
 /// JA = Pmod LS1 -- note, IR sensors are on S1 and S4
 /// JB = Pmod MAXSONAR -- note, sonar0 is on channel 0 and sonar1 on channel 1
 /// JD = Pmod DHB1
 
-// Infrared Sensor Defines
-#define LS1_BASEADDR              XPAR_AXI_GPIO_PMOD_LS1_BASEADDR // Note: this may be inaccurate!
+// Vivado Hardware Defines
+//#define AXI_GPIO_0_BASEADDR       0x40000000
+//#define AXI_GPIO_1_BASEADDR       0x40010000
+//#define AXI_GPIO_2_BASEADDR       0x40020000
+#define LS1_BASEADDR              0x40020000 //axi_gpio_2
 #define IR_L_SENSOR               0x1
 #define IR_R_SENSOR               0x2
-
-// Sonar Sensor Defines -- Note: may be inaccurate!
-#define PMOD_SONAR0_BASEADDR      XPAR_PMOD_DUAL_MAXSONAR_0_SONAR0_BASEADDR
-#define PMOD_SONAR1_BASEADDR      XPAR_PMOD_DUAL_MAXSONAR_0_SONAR1_BASEADDR
-
-// Vivado Hardware Defines
-#define AXI_GPIO_0_BASEADDR       0x40000000
-#define AXI_GPIO_1_BASEADDR       0x40010000
-#define AXI_GPIO_2_BASEADDR       0x40020000
 #define DHB1_GPIO_BASEADDR        0x44A00000
 #define DHB1_MOTOR_FB_BASEADDR    0x44A10000
 #define DHB1_PWM_BASEADDR         0x44A20000
 #define Dual_MAXSONAR_0_BASEADDR  0x44A30000
+#define XPAR_TMRCTR_0_DEVICE_ID   0x41C00000
+#define XPAR_INTC_0_DEVICE_ID     0x41200000
 
 // PWM Defines
 #define PWM_PERIOD  0x00029000   // 2ms
@@ -54,12 +50,7 @@
 #define PWM_M1      0
 #define PWM_M2      1
 
-// Clock frequency define (may be inaccurate! I don't think 8124700 is exactly the Arty's clock)
-#ifdef __MICROBLAZE__
-#define CLK_FREQ XPAR_CPU_M_AXI_DP_FREQ_HZ
-#else
-#define CLK_FREQ 81247000 // FCLK0 frequency not found in xparameters.h
-#endif
+#define CLK_FREQ 81247000
 
 // Timer and load value defines
 #define LOAD_VALUE      40624 // ~0.5ms period (0.5000012 closer to actual)
@@ -67,18 +58,26 @@
 
 // Interrupt and timer ID defines
 #define TMRCTR_DEVICE_ID    XPAR_TMRCTR_0_DEVICE_ID
-#define TMRCTR_INTERRUPT_ID XPAR_INTC_0_TMRCTR_0_VEC_ID
+#define TMRCTR_INTERRUPT_ID XPAR_FABRIC_XTMRCTR_0_INTR
 #define INTC_DEVICE_ID      XPAR_INTC_0_DEVICE_ID
+
+PmodDHB1* MotorController;
 
 ////////////////////////////////////////////////////////////////////////////////////
 /// TEST FUNCTIONS
 
-void testInfrared() {
+void delay(int ms){
+    static count = ms;
+    
+    
+}
+
+void testLightSensors() {
   // Get reference infrared sensor registers
   volatile u32 *InfraredData =        (u32 *)LS1_BASEADDR + XGPIO_DATA_OFFSET;
-	volatile u32 *InfraredTristateReg = (u32 *)LS1_BASEADDR + XGPIO_TRI_OFFSET;
+  volatile u32 *InfraredTristateReg = (u32 *)LS1_BASEADDR + XGPIO_TRI_OFFSET;
 
-	*InfraredTristateReg = 0xF;
+  *InfraredTristateReg = 0xF;
 
   while (1)
 	{
@@ -94,46 +93,37 @@ void testInfrared() {
 
 void testSonar() {
   // Initialize sonar instances
-  PmodMAXSONAR sonar0;
-  PmodMAXSONAR sonar1;
-  MAXSONAR_begin(&sonar0, PMOD_SONAR0_BASEADDR, CLK_FREQ);
-  MAXSONAR_begin(&sonar1, PMOD_SONAR1_BASEADDR, CLK_FREQ);
+  PMOD_DUAL_MAXSONAR sonar0 = {Dual_MAXSONAR_0_BASEADDR, CLK_FREQ, 0};
+  PMOD_DUAL_MAXSONAR sonar1 = {Dual_MAXSONAR_0_BASEADDR, CLK_FREQ, 0};
+  MAXSONAR_begin(&sonar0, Dual_MAXSONAR_0_BASEADDR, CLK_FREQ);
+  MAXSONAR_begin(&sonar1, Dual_MAXSONAR_0_BASEADDR, CLK_FREQ); //Dual_MAXSONAR_0_BASEADDR +32??
 
   while (1)
   {
-    u16 distance0 = MAXSONAR_GetDistance(&sonar0);
-    u16 distance1 = MAXSONAR_GetDistance(&sonar1);
+    u16 distance0 = MAXSONAR_getDistance(&sonar0, IR_L_SENSOR);
+    u16 distance1 = MAXSONAR_getDistance(&sonar1, IR_R_SENSOR);
     xil_printf("Sonar0: %d cm, Sonar1: %d cm\r", distance0, distance1);
   }
 }
 
 void testMotor() {
-  // Initialize PWM instance
-  PWM pwm;
-  PWM_Initialize(&pwm, DHB1_PWM_BASEADDR);
 
-  // Set PWM period and duty cycle for both motors
-  PWM_SetPeriod(&pwm, PWM_M1, PWM_PERIOD);
-  PWM_SetPeriod(&pwm, PWM_M2, PWM_PERIOD);
-  PWM_SetDutyCycle(&pwm, PWM_M1, PWM_DUTY);
-  PWM_SetDutyCycle(&pwm, PWM_M2, PWM_DUTY);
+    DHB1_begin(MotorController, DHB1_GPIO_BASEADDR, DHB1_PWM_BASEADDR,
+                CLK_FREQ, 0x2);
+    DHB1_motorEnable(MotorController);
+    DHB1_setDirs(MotorController, 0, 0);
+    
+    DHB1_setMotorSpeeds(MotorController, 100, 100);
+    DHB1_motorDisable(MotorController);
 
-  // Enable both motors
-  PWM_Enable(&pwm, PWM_M1);
-  PWM_Enable(&pwm, PWM_M2);
-
-  while (1) {
-    // do nothing
-  }
 }
 
-////////////////////////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////////////////////
+
 ////////////////////////////////////////////////////////////////////////////////////
 /// Function prototypes
 
 // Timer Interrupt Service Routine
-void timer_ISR(void *CallBackRef, u8 TmrCtrNumber);
+//void timer_ISR(void *CallBackRef, u8 TmrCtrNumber);
 // Helper functions
 int platform_init();
 void TmrCtrDisableIntr(XIntc *IntcInstancePtr, u16 IntrId);
@@ -182,22 +172,22 @@ volatile static state currentState;
 // Hardware instances
 XIntc InterruptController;  // Instance of the Interrupt Controller
 XTmrCtr Timer;              // Instance of the Timer
-XGpio btnGpio;              // Instance of the AXI_GPIO_0
-XGpio ledGpio;              // Instance of the AXI_GPIO_1
+XGpio lightGpio;              // Instance of the AXI_GPIO_2
 
-void timer_ISR(void *CallBackRef, u8 TmrCtrNumber)
-{
-  // Increment system time
-  MasterTimerCounter++; // 1 unit = 0.5ms
 
-  // Get instance of the timer linked to the interrupt
-  XTmrCtr *InstancePtr = (XTmrCtr *)CallBackRef;
+// void timer_ISR(void *CallBackRef, u8 TmrCtrNumber)
+// {
+//   // Increment system time
+//   MasterTimerCounter++; // 1 unit = 0.5ms
 
-  // Check if the timer counter has expired
-  if (XTmrCtr_IsExpired(InstancePtr, TmrCtrNumber))
-    // Queue our supervisor to run
-    queue[TASK_SUPERVISOR]->taskReady = TRUE;
-}
+//   // Get instance of the timer linked to the interrupt
+//   XTmrCtr *InstancePtr = (XTmrCtr *)CallBackRef;
+
+//   // Check if the timer counter has expired
+//   if (XTmrCtr_IsExpired(InstancePtr, TmrCtrNumber))
+//     // Queue our supervisor to run
+//     queue[TASK_SUPERVISOR]->taskReady = TRUE;
+// }
 
 ////////////////////////////////////////////////////////////////////////////////////
 /// "Finished" functions (from Lab 6)
@@ -206,25 +196,18 @@ int platform_init()
   int status = XST_FAILURE;
 
   // Initialize the GPIO instances
-  status = XGpio_Initialize(&btnGpio, XPAR_GPIO_0_DEVICE_ID);
+  status = XGpio_Initialize(&lightGpio, LS1_BASEADDR);
   if (status != XST_SUCCESS)
   {
-    xil_printf("Failed to initialize GPIO_0! Execution stopped.\n");
-    executionFailed();
-  }
-
-  status = XGpio_Initialize(&ledGpio, XPAR_GPIO_1_DEVICE_ID);
-  if (status != XST_SUCCESS)
-  {
-    xil_printf("Failed to initialize GPIO_1! Execution stopped.\n");
+    xil_printf("Failed to initialize GPIO_2! Execution stopped.\n");
     executionFailed();
   }
 
   // Set GPIO_0 CHANNEL 2 as input
-  XGpio_SetDataDirection(&btnGpio, CHANNEL_2, 0xF);
+  XGpio_SetDataDirection(&lightGpio, 0x2, 0xF);
 
   // Set GPIO_1 CHANNEL 1 as output
-  XGpio_SetDataDirection(&ledGpio, CHANNEL_1, 0x0);
+  XGpio_SetDataDirection(&lightGpio, 0x1, 0xF);
 
   // Initialize the timer counter instance
   status = XTmrCtr_Initialize(&Timer, TMRCTR_DEVICE_ID);
@@ -302,9 +285,7 @@ int platform_init()
 
 void executionFailed()
 {
-  u32 *rgbLedsData = (u32 *)(XPAR_GPIO_1_BASEADDR);
-  *rgbLedsData = RGB_RED; // display all red LEDs if fail state occurs
-
+  xil_printf("Execution Failed");
   // trap the program in an infinite loop
   while (1);
 }

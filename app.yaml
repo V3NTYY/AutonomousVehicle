@@ -1,0 +1,4 @@
+domain_path: C:\Users\gharding\labs\lab8_platform\export\lab8_platform\sw\standalone_microblaze_0
+app_src_dir: C:\Xilinx\2025.1.1\Vitis\data\embeddedsw\lib\sw_apps\empty_application
+template: empty_application
+lang: c
