@@ -93,15 +93,17 @@ void testLightSensors() {
 
 void testSonar() {
   // Initialize sonar instances
-  PMOD_DUAL_MAXSONAR sonar0 = {Dual_MAXSONAR_0_BASEADDR, CLK_FREQ, 0};
-  PMOD_DUAL_MAXSONAR sonar1 = {Dual_MAXSONAR_0_BASEADDR, CLK_FREQ, 0};
+  PMOD_DUAL_MAXSONAR sonar0 = {Dual_MAXSONAR_0_BASEADDR + MAXSONAR_CHANNEL_0_OFFSET, CLK_FREQ, 0};
+  PMOD_DUAL_MAXSONAR sonar1 = {Dual_MAXSONAR_0_BASEADDR + MAXSONAR_CHANNEL_1_OFFSET, CLK_FREQ, 0};
+
+  // Start sonar instances
   MAXSONAR_begin(&sonar0, Dual_MAXSONAR_0_BASEADDR, CLK_FREQ);
-  MAXSONAR_begin(&sonar1, Dual_MAXSONAR_0_BASEADDR, CLK_FREQ); //Dual_MAXSONAR_0_BASEADDR +32??
+  MAXSONAR_begin(&sonar1, Dual_MAXSONAR_0_BASEADDR, CLK_FREQ);
 
   while (1)
   {
-    u16 distance0 = MAXSONAR_getDistance(&sonar0, IR_L_SENSOR);
-    u16 distance1 = MAXSONAR_getDistance(&sonar1, IR_R_SENSOR);
+    u16 distance0 = MAXSONAR_getDistance(&sonar0, MAXSONAR_1);
+    u16 distance1 = MAXSONAR_getDistance(&sonar1, MAXSONAR_2);
     xil_printf("Sonar0: %d cm, Sonar1: %d cm\r", distance0, distance1);
   }
 }
