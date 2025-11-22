@@ -66,14 +66,17 @@
 ////////////////////////////////////////////////////////////////////////////////////
 /// FUNCTION PROTOTYPES
 
-/// Timer Interrupt Service Routine
+/// ISR and delay functions
 //void timer_ISR(void *CallBackRef, u8 TmrCtrNumber);
+void delay(int ms);
 
 /// Helper functions
 int platform_init();
 void executionFailed();
 void setupTasks();
-void delay(int ms);
+
+/// Tick functions
+void Motor_Tick();
 
 /// Tasks
 void taskSupervisor(void *data);
@@ -159,10 +162,10 @@ void testLightSensors() {
 
   while (1)
 	{
-		if (*InfraredData & IR_L_SENSOR)
+		if (*InfraredData & IR_L_SENSOR) // left sensor touched the reflective tape
 			xil_printf("left!\r");
 
-		if (*InfraredData & IR_R_SENSOR)
+		if (*InfraredData & IR_R_SENSOR) // right sensor touched the reflective tape
 			xil_printf("right!\r");
 
 		xil_printf("0x%08x\r", *InfraredData);
@@ -180,6 +183,11 @@ void testSonar() {
 
   while (1)
   {
+    // NOTE:
+    // The lab8 doc on HThreads notes that getDistance returns the value in inches
+    // However, the original lab8 example that uses getDistance implies its in cm
+    // we need to test and see what it actually is.
+
     u16 distance0 = MAXSONAR_getDistance(&sonar0, MAXSONAR_1);
     u16 distance1 = MAXSONAR_getDistance(&sonar1, MAXSONAR_2);
     xil_printf("Sonar0: %d cm, Sonar1: %d cm\r", distance0, distance1);
