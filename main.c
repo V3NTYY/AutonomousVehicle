@@ -108,14 +108,16 @@ typedef struct
 // Task queue
 TCB_t *queue[MAX_TASKS];
 
-// Timer counter -- multiply by TIMER_PERIOD_US to get time in microseconds
-static volatile uint32_t MasterTimerCounter;
+// Timer counter -- multiply by TIMER_PERIOD_US to get time elapsed since system boot in microseconds
+uint32_t TimerCounter;
 
 // State variable
-static volatile state currentState;
+state currentState;
 
-// Motor Controller
+// Motor Controller, Global Speed Variables
 PmodDHB1* MotorController;
+u8 LeftMotorSpeed;          // This variable's value will be constantly applied to the left motor
+u8 RightMotorSpeed;         // This variable's value will be constantly applied to the right motor
 
 // Hardware instances
 XIntc InterruptController;  // Instance of the Interrupt Controller
@@ -128,7 +130,7 @@ XGpio lightGpio;            // Instance of the AXI_GPIO_2
 // void timer_ISR(void *CallBackRef, u8 TmrCtrNumber)
 // {
 //   // Increment system time
-//   MasterTimerCounter++; // 1 unit = 0.5ms
+//   TimerCounter++; // 1 unit = 0.5ms
 
 //   // Get instance of the timer linked to the interrupt
 //   XTmrCtr *InstancePtr = (XTmrCtr *)CallBackRef;
@@ -142,7 +144,7 @@ XGpio lightGpio;            // Instance of the AXI_GPIO_2
 void delay(int ms){
   static count = ms;
 
-  // TODO: implement delay 
+  // TODO: implement delay based on 
 }
 
 ////////////////////////////////////////////////////////////////////////////////////
@@ -196,9 +198,17 @@ void testMotor() {
 }
 
 ////////////////////////////////////////////////////////////////////////////////////
-/// Robot functions
+/// ROBOT FUNCTIONS
 
-/// 
+/// Update motor speeds based on global speed variables
+void Motor_Tick() {
+
+  // Do PID Calculation shtuff? (if we're going with PID)
+
+  // Apply current speed vars to motor
+  DHB1_setMotorSpeeds(MotorController, LeftMotorSpeed, RightMotorSpeed);
+}
+
 
 ////////////////////////////////////////////////////////////////////////////////////
 /// HARDWARE INITIALIZATION
@@ -327,9 +337,11 @@ void setupTasks() {
 
 int main(int argc, char const *argv[])
 {
-  // Init timer counter and other variables
-  MasterTimerCounter = 0;
-  currentState = STATE_IDLE;
+  // Initialize timer counter, motor speeds, and state
+  TimerCounter =    0;
+  LeftMotorSpeed =  MOTOR_MIN_SPEED;
+  RightMotorSpeed = MOTOR_MIN_SPEED;
+  currentState =    STATE_IDLE;
 
   // Setup the GPIO, Interrupt Controller and Timer
   int status = XST_FAILURE;
