@@ -6,7 +6,7 @@
 /// Bare-metal approach to follow-the-line robot
 
 ////////////////////////////////////////////////////////////////////////////////////
-/// Includes and Defines
+/// INCLUDES AND DEFINES
 
 #include <xil_printf.h>
 #include <xparameters.h>
@@ -26,11 +26,11 @@
 #include "Pmod_DHB1.h"
 
 /// Note on Pmod connections:
-/// JA = Pmod LS1 -- note, IR sensors are on S1 and S4
-/// JB = Pmod MAXSONAR -- note, sonar0 is on channel 0 and sonar1 on channel 1
-/// JD = Pmod DHB1
+// JA = Pmod LS1 -> IR sensors are on S1 and S4
+// JB = Pmod MAXSONAR -> sonar0 is on channel 0 and sonar1 on channel 1
+// JD = Pmod DHB1
 
-// Vivado Hardware Defines
+/// Vivado Hardware Defines
 //#define AXI_GPIO_0_BASEADDR       0x40000000
 //#define AXI_GPIO_1_BASEADDR       0x40010000
 //#define AXI_GPIO_2_BASEADDR       0x40020000
@@ -44,33 +44,103 @@
 #define XPAR_TMRCTR_0_DEVICE_ID   0x41C00000
 #define XPAR_INTC_0_DEVICE_ID     0x41200000
 
-// PWM Defines
-#define PWM_PERIOD  0x00029000   // 2ms
-#define PWM_DUTY    0x00014800   // 50% duty cycle
-#define PWM_M1      0
-#define PWM_M2      1
+/// Frequency defines
+#define CLK_FREQ            81247000
+#define DHB1_PWM_PERIOD     0x2   // 2 ms period
 
-#define CLK_FREQ 81247000
+/// Timer and load value defines
+#define LOAD_VALUE          40624 // ~0.5ms period (0.5000012 closer to actual)
+#define TIMER_PERIOD_US     500   // Timer period in microseconds (500 us = 0.5 ms)
 
-// Timer and load value defines
-#define LOAD_VALUE      40624 // ~0.5ms period (0.5000012 closer to actual)
-#define TIMER_PERIOD_US 500   // Timer period in microseconds (500 us = 0.5 ms)
-
-// Interrupt and timer ID defines
+/// Interrupt and timer ID defines
 #define TMRCTR_DEVICE_ID    XPAR_TMRCTR_0_DEVICE_ID
 #define TMRCTR_INTERRUPT_ID XPAR_FABRIC_XTMRCTR_0_INTR
 #define INTC_DEVICE_ID      XPAR_INTC_0_DEVICE_ID
 
+////////////////////////////////////////////////////////////////////////////////////
+/// FUNCTION PROTOTYPES
+
+/// Timer Interrupt Service Routine
+//void timer_ISR(void *CallBackRef, u8 TmrCtrNumber);
+
+/// Helper functions
+int platform_init();
+void executionFailed();
+void setupTasks();
+void delay(int ms);
+
+/// Tasks
+void taskSupervisor(void *data);
+void taskSonar(void *data);
+
+////////////////////////////////////////////////////////////////////////////////////
+/// Enums, structs and global variables
+
+// Enumerated type for the tasks
+typedef enum
+{
+  TASK_SUPERVISOR,
+  TASK_SONAR,
+  MAX_TASKS
+} task_t;
+
+// Enumerated type for states -- i.e. (move forward, turn left, turn right, etc)
+typedef enum
+{
+  STATE_IDLE,
+  MAX_STATES
+} state;
+
+// Task Control Block (TCB) structure
+typedef struct
+{
+  void (*taskPtr)(void *);
+  void *taskDataPtr;
+  u8 taskReady;
+} TCB_t;
+
+// Task queue
+TCB_t *queue[MAX_TASKS];
+
+// Timer counter -- multiply by TIMER_PERIOD_US to get time in microseconds
+static volatile uint32_t MasterTimerCounter;
+
+// State variable
+static volatile state currentState;
+
+// Motor Controller
 PmodDHB1* MotorController;
+
+// Hardware instances
+XIntc InterruptController;  // Instance of the Interrupt Controller
+XTmrCtr Timer;              // Instance of the Timer
+XGpio lightGpio;            // Instance of the AXI_GPIO_2
+
+////////////////////////////////////////////////////////////////////////////////////
+/// ISRs and Delay functions
+
+// void timer_ISR(void *CallBackRef, u8 TmrCtrNumber)
+// {
+//   // Increment system time
+//   MasterTimerCounter++; // 1 unit = 0.5ms
+
+//   // Get instance of the timer linked to the interrupt
+//   XTmrCtr *InstancePtr = (XTmrCtr *)CallBackRef;
+
+//   // Check if the timer counter has expired
+//   if (XTmrCtr_IsExpired(InstancePtr, TmrCtrNumber))
+//     // Queue our supervisor to run
+//     queue[TASK_SUPERVISOR]->taskReady = TRUE;
+// }
+
+void delay(int ms){
+  static count = ms;
+
+  // TODO: implement delay 
+}
 
 ////////////////////////////////////////////////////////////////////////////////////
 /// TEST FUNCTIONS
-
-void delay(int ms){
-    static count = ms;
-    
-    
-}
 
 void testLightSensors() {
   // Get reference infrared sensor registers
@@ -109,90 +179,25 @@ void testSonar() {
 }
 
 void testMotor() {
-
     DHB1_begin(MotorController, DHB1_GPIO_BASEADDR, DHB1_PWM_BASEADDR,
-                CLK_FREQ, 0x2);
+                CLK_FREQ, DHB1_PWM_PERIOD);
+
     DHB1_motorEnable(MotorController);
     DHB1_setDirs(MotorController, 0, 0);
     
     DHB1_setMotorSpeeds(MotorController, 100, 100);
     DHB1_motorDisable(MotorController);
-
 }
 
+////////////////////////////////////////////////////////////////////////////////////
+/// Robot functions
+
+/// 
 
 ////////////////////////////////////////////////////////////////////////////////////
-/// Function prototypes
+/// HARDWARE INITIALIZATION
 
-// Timer Interrupt Service Routine
-//void timer_ISR(void *CallBackRef, u8 TmrCtrNumber);
-// Helper functions
-int platform_init();
-void TmrCtrDisableIntr(XIntc *IntcInstancePtr, u16 IntrId);
-void executionFailed();
-void setupTasks();
-
-// Tasks
-void taskSupervisor(void *data);
-void taskSonar(void *data);
-
-////////////////////////////////////////////////////////////////////////////////////
-/// Enums, structs and global variables
-
-// Enumerated type for the tasks
-typedef enum
-{
-  TASK_SUPERVISOR,
-  TASK_SONAR,
-  MAX_TASKS
-} task_t;
-
-// Enumerated type for states -- i.e. (move forward, turn left, turn right, etc)
-typedef enum
-{
-  STATE_IDLE,
-  MAX_STATES
-} state;
-
-// Task Control Block (TCB) structure
-typedef struct
-{
-  void (*taskPtr)(void *);
-  void *taskDataPtr;
-  u8 taskReady;
-} TCB_t;
-
-// Task queue
-TCB_t *queue[MAX_TASKS];
-
-// Timer counter -- multiply by TIMER_PERIOD_US to get time in microseconds
-volatile static uint32_t MasterTimerCounter;
-
-// State variable
-volatile static state currentState;
-
-// Hardware instances
-XIntc InterruptController;  // Instance of the Interrupt Controller
-XTmrCtr Timer;              // Instance of the Timer
-XGpio lightGpio;              // Instance of the AXI_GPIO_2
-
-
-// void timer_ISR(void *CallBackRef, u8 TmrCtrNumber)
-// {
-//   // Increment system time
-//   MasterTimerCounter++; // 1 unit = 0.5ms
-
-//   // Get instance of the timer linked to the interrupt
-//   XTmrCtr *InstancePtr = (XTmrCtr *)CallBackRef;
-
-//   // Check if the timer counter has expired
-//   if (XTmrCtr_IsExpired(InstancePtr, TmrCtrNumber))
-//     // Queue our supervisor to run
-//     queue[TASK_SUPERVISOR]->taskReady = TRUE;
-// }
-
-////////////////////////////////////////////////////////////////////////////////////
-/// "Finished" functions (from Lab 6)
+/// Timer, Interrupt Controller and lightGPIO Initialization
 int platform_init()
 {
   int status = XST_FAILURE;
@@ -285,6 +290,7 @@ int platform_init()
   return XST_SUCCESS;
 }
 
+/// Function that is called when hardware couldn't be initialized (via platform_init())
 void executionFailed()
 {
   xil_printf("Execution Failed");
@@ -292,17 +298,10 @@ void executionFailed()
   while (1);
 }
 
-// Optional demonstration on how to disable interrupt
-void TmrCtrDisableIntr(XIntc *IntcInstancePtr, u16 IntrId)
-{
-  // Disable the interrupt for the timer counter
-  XIntc_Disable(IntcInstancePtr, IntrId);
-
-  return;
-}
-
 ////////////////////////////////////////////////////////////////////////////////////
-/// Misc functions
+/// MISC FUNCTIONS
+
+/// Setup task queue
 void setupTasks() {
   // Task 0: taskSupervisor
   queue[TASK_SUPERVISOR] = malloc(sizeof(TCB_t));
@@ -318,11 +317,10 @@ void setupTasks() {
 }
 
 ////////////////////////////////////////////////////////////////////////////////////
-/// Main function
+/// MAIN FUNCTION
 
 int main(int argc, char const *argv[])
 {
-
   // Init timer counter and other variables
   MasterTimerCounter = 0;
   currentState = STATE_IDLE;
@@ -361,7 +359,7 @@ int main(int argc, char const *argv[])
 }
 
 ////////////////////////////////////////////////////////////////////////////////////
-/// Task implementations
+/// TASK IMPLEMENTATIONS
 
 /// Supervisor task
 void taskSupervisor(void *data) {
