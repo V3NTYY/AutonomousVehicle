@@ -57,6 +57,12 @@
 #define TMRCTR_INTERRUPT_ID XPAR_FABRIC_XTMRCTR_0_INTR
 #define INTC_DEVICE_ID      XPAR_INTC_0_DEVICE_ID
 
+/// Motor defines
+#define MOTOR_FORWARD       0 // this is just a guess. if forward != 0, then its 1
+#define MOTOR_REVERSE       1 // this is just a guess. if reverse != 1, then its 0
+#define MOTOR_MAX_SPEED     100
+#define MOTOR_MIN_SPEED     0
+
 ////////////////////////////////////////////////////////////////////////////////////
 /// FUNCTION PROTOTYPES
 
@@ -183,9 +189,9 @@ void testMotor() {
                 CLK_FREQ, DHB1_PWM_PERIOD);
 
     DHB1_motorEnable(MotorController);
-    DHB1_setDirs(MotorController, 0, 0);
+    DHB1_setDirs(MotorController, MOTOR_FORWARD, MOTOR_FORWARD);
     
-    DHB1_setMotorSpeeds(MotorController, 100, 100);
+    DHB1_setMotorSpeeds(MotorController, MOTOR_MAX_SPEED, MOTOR_MAX_SPEED);
     DHB1_motorDisable(MotorController);
 }
 
