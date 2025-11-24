@@ -96,6 +96,7 @@ void     taskSupervisor();
 void     taskSonar();
 void     taskIR();
 void     taskMotor();
+void     taskPivot();
 
 ////////////////////////////////////////////////////////////////////////////////////
 /// Enums, structs and global variables
@@ -107,6 +108,7 @@ typedef enum
   TASK_SONAR,
   TASK_IR,
   TASK_MOTOR,
+  TASK_PIVOT,
   MAX_TASKS
 } task_t;
 
@@ -117,6 +119,7 @@ typedef enum
   STATE_SETTING_SPEED,
   STATE_MEASURE_SONAR,
   STATE_MEASURE_IR,
+  STATE_PIVOT_OBSTACLE,
   MAX_STATES
 } state;
 
@@ -129,18 +132,19 @@ typedef struct
 } TCB_t;
 
 // Task queue
-TCB_t *queue[MAX_TASKS];
+TCB_t     *queue[MAX_TASKS];
 
 // Timer counter -- multiply by TIMER_PERIOD_US to get time elapsed since system boot in microseconds
-uint32_t SystemCount;
+uint32_t  SystemCount;
 
-// State variable
-state currentState;
+// State variable and pivot flag
+state     currentState;
+_Bool     pivotRequired;
 
 // Motor Controller, Global Speed Variables
 PmodDHB1* MotorController;
-u8 LeftMotorSpeed;          // This variable's value will be constantly applied to the left motor
-u8 RightMotorSpeed;         // This variable's value will be constantly applied to the right motor
+u8        LeftMotorSpeed;   // This variable's value will be constantly applied to the left motor
+u8        RightMotorSpeed;  // This variable's value will be constantly applied to the right motor
 
 // Hardware instances
 XIntc InterruptController;  // Instance of the Interrupt Controller
@@ -425,6 +429,12 @@ void setupTasks() {
   queue[TASK_MOTOR]->taskPtr =          taskMotor;
   queue[TASK_MOTOR]->taskDataPtr =      NULL;
   queue[TASK_MOTOR]->taskReady =        FALSE;
+
+  // Task 4: taskPivot
+  queue[TASK_PIVOT] =                   malloc(sizeof(TCB_t));
+  queue[TASK_PIVOT]->taskPtr =          taskPivot;
+  queue[TASK_PIVOT]->taskDataPtr =      NULL;
+  queue[TASK_PIVOT]->taskReady =        FALSE;
 }
 
 ////////////////////////////////////////////////////////////////////////////////////
@@ -441,6 +451,7 @@ int main(int argc, char const *argv[])
 {
   // Initialize timer counter, motor speeds, state, and tristate registers
   SystemCount =           0;
+  pivotRequired =         FALSE;
   LeftMotorSpeed =        MOTOR_MIN_SPEED;
   RightMotorSpeed =       MOTOR_MIN_SPEED;
   currentState =          STATE_IDLE;
@@ -501,18 +512,25 @@ void taskSupervisor() {
       break;
 
     case STATE_SETTING_SPEED:
-      queue[TASK_MOTOR]->taskReady = TRUE;                // Update motor speeds
-      currentState =                 STATE_MEASURE_IR;    // next task is measuring IR
+      queue[TASK_MOTOR]->taskReady = TRUE;                  // Update motor speeds
+      currentState =                 STATE_MEASURE_IR;      // next task is measuring IR
       break;
 
     case STATE_MEASURE_IR:
-      queue[TASK_IR]->taskReady =    TRUE;                // Measure IR (did we cross the tape)
-      currentState =                 STATE_MEASURE_SONAR; // next task is measuring SONAR
+      queue[TASK_IR]->taskReady =    TRUE;                  // Measure IR (did we cross the tape)
+      currentState =                 STATE_MEASURE_SONAR;   // next task is measuring SONAR
+
+      // TODO: add logic w/ pivotRequired flag to determine pivot direction
       break;
 
     case STATE_MEASURE_SONAR:
-      queue[TASK_SONAR]->taskReady = TRUE;                // Measure SONAR (are we hitting an obstacle)
-      currentState =                 STATE_SETTING_SPEED; // next task is setting speed
+      queue[TASK_SONAR]->taskReady = TRUE;                  // Measure SONAR (are we hitting an obstacle)
+      currentState =                 STATE_SETTING_SPEED;   // next task is setting speed
+      break;
+
+    case STATE_PIVOT_OBSTACLE:
+      queue[TASK_PIVOT]->taskReady = TRUE;                  // Pivot to avoid obstacle
+      currentState =                 STATE_SETTING_SPEED;   // next task is setting speed after pivot
       break;
 
     default:
@@ -551,4 +569,26 @@ void taskMotor() {
 void taskSonar() {
   // Get sonar distance
   uint32_t distance = getSonarDistance();
+
+  // If sonar distance is below the threshold, an obstacle is incoming (stop the robot pls)
+  if (distance < SONAR_THRESHOLD_VALUE) {
+      LeftMotorSpeed = MOTOR_MIN_SPEED;
+      RightMotorSpeed = MOTOR_MIN_SPEED;
+
+      // Update pivot flag to instruct robot to avoid obstacle
+      pivotRequired = TRUE;
+  }
+}
+
+// Pivot and avoid obstacle
+void taskPivot() {
+
+  // README: more logic will be added later on to determine the correct direction to pivot, so we stay on the line
+
+  // Disable left motor, set right motor to 45% (turning left motion)
+  LeftMotorSpeed = MOTOR_MIN_SPEED;
+  RightMotorSpeed = 45;
+
+  // TODO: Disable flag if pivot completed
+  //pivotRequired = FALSE;
 }
