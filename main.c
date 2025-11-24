@@ -89,6 +89,7 @@ void delay(int ms);
 int      platform_init();
 void     executionFailed();
 void     setupTasks();
+void     setupPWM();
 uint32_t getSonarDistance();
 
 /// Tasks
@@ -177,7 +178,7 @@ void delay(int ms){
 }
 
 ////////////////////////////////////////////////////////////////////////////////////
-/// TEST FUNCTIONS
+/// SENSOR HELPER FUNCTIONS
 
 /*---------------------------------------------------------------------------------------
     getSonarDistance()
@@ -214,6 +215,15 @@ void delay(int ms){
 //         return sma;
 //     }
 //}
+
+void setupPWM() {
+    // TODO: PWM setup.
+
+    // TODO: include MotorFeedback.h somehow?
+}
+
+////////////////////////////////////////////////////////////////////////////////////
+/// TEST FUNCTIONS
 
 void testLightSensors() {
   // Get reference infrared sensor registers
