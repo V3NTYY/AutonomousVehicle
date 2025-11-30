@@ -71,10 +71,11 @@
 #define GPIO_INTERRUPT_ID     XPAR_FABRIC_XGPIO_0_INTR
 
 /// Motor defines
-#define MOTOR_FORWARD         0 // this is just a guess. if forward != 0, then its 1
-#define MOTOR_REVERSE         1 // this is just a guess. if reverse != 1, then its 0
+#define MOTOR_FORWARD         0   // this is just a guess. if forward != 0, then its 1
+#define MOTOR_REVERSE         1   // this is just a guess. if reverse != 1, then its 0
 #define MOTOR_MAX_SPEED       100
 #define MOTOR_MIN_SPEED       0
+#define MOTOR_TURN_SPEED      45  // speed to set when turning
 
 #define SONAR_THRESHOLD_VALUE 68000
 
@@ -124,6 +125,23 @@ typedef enum
   MAX_STATES
 } state;
 
+// Enumerated type for pivoting (we aren't pivoting, are we beginning pivoting, pivoting left, pivoting right)
+typedef enum
+{
+  PIVOT_NONE,
+  PIVOT_REQUIRED,
+  PIVOT_LEFT,
+  PIVOT_RIGHT
+} pivot;
+
+// Enumerated type for determining vehicle direction (undetermined if we haven't triggered IR yet, left if robot is veering left, right if veering right)
+typedef enum
+{
+  DIRECTION_UNDETERMINED,
+  DIRECTION_LEFT,
+  DIRECTION_RIGHT
+} direction;
+
 // Task Control Block (TCB) structure
 typedef struct
 {
@@ -138,9 +156,12 @@ TCB_t     *queue[MAX_TASKS];
 // Timer counter -- multiply by TIMER_PERIOD_US to get time elapsed since system boot in microseconds
 uint32_t  SystemCount;
 
-// State variable and pivot flag
+// State variable and flags
 state     currentState;
-_Bool     pivotRequired;
+pivot     currentPivot;
+direction currentDirection;
+_Bool     motorInitialized;
+_Bool     obstacleDetected;
 
 // Motor Controller, Global Speed Variables
 PmodDHB1* MotorController;
@@ -230,10 +251,10 @@ void testLightSensors() {
   volatile u32 *InfraredData =        (u32 *)LS1_BASEADDR + XGPIO_DATA_OFFSET;
   volatile u32 *InfraredTristateReg = (u32 *)LS1_BASEADDR + XGPIO_TRI_OFFSET;
 
+  // Set infrared sensor as input
   *InfraredTristateReg = 0xF;
 
-  while (1)
-	{
+  while (1) {
 		if (*InfraredData & IR_L_SENSOR) // left sensor touched the reflective tape
 			xil_printf("left!\r");
 
@@ -286,8 +307,7 @@ void testMotor() {
 /// HARDWARE INITIALIZATION
 
 /// Timer, Interrupt Controller and lightGPIO Initialization
-int platform_init()
-{
+int platform_init() {
   int status = XST_FAILURE;
 
   // Initialize the GPIO instances
@@ -404,15 +424,14 @@ int platform_init()
 }
 
 /// Function that is called when hardware couldn't be initialized (via platform_init())
-void executionFailed()
-{
+void executionFailed() {
   xil_printf("Execution Failed");
   // trap the program in an infinite loop
   while (1);
 }
 
 ////////////////////////////////////////////////////////////////////////////////////
-/// MISC FUNCTIONS
+/// SETUP TASK FUNCTIONS
 
 /// Setup task queue
 void setupTasks() {
@@ -461,10 +480,12 @@ int main(int argc, char const *argv[])
 {
   // Initialize timer counter, motor speeds, state, and tristate registers
   SystemCount =           0;
-  pivotRequired =         FALSE;
+  motorInitialized =      FALSE;
+  obstacleDetected =      FALSE;
   LeftMotorSpeed =        MOTOR_MIN_SPEED;
   RightMotorSpeed =       MOTOR_MIN_SPEED;
   currentState =          STATE_IDLE;
+  currentPivot =          PIVOT_NONE;
   *InfraredTristateReg =  0xF;
   *rgbLEDsTri =           0x0;
 
@@ -514,7 +535,8 @@ void taskSupervisor() {
 
       /// STATE_IDLE LOGIC ///
         // look for some activation signal (i.e. button press, idk man)
-        // start round-robin FSM
+        // start round-robin FSM like so:
+        //currentState = STATE_SETTING_SPEED;
       /// END OF LOGIC ///
 
       /// TEST CODE BELOW
@@ -530,12 +552,16 @@ void taskSupervisor() {
       queue[TASK_IR]->taskReady =    TRUE;                  // Measure IR (did we cross the tape)
       currentState =                 STATE_MEASURE_SONAR;   // next task is measuring SONAR
 
-      // TODO: add logic w/ pivotRequired flag to determine pivot direction
+      // TODO: add logic w/ currentPivot variable to determine pivot direction
       break;
 
     case STATE_MEASURE_SONAR:
       queue[TASK_SONAR]->taskReady = TRUE;                  // Measure SONAR (are we hitting an obstacle)
       currentState =                 STATE_SETTING_SPEED;   // next task is setting speed
+
+      // If there's an obstacle, PIVOT
+      if (obstacleDetected)
+        currentState =               STATE_PIVOT_OBSTACLE;  // next task is pivoting to avoid obstacle
       break;
 
     case STATE_PIVOT_OBSTACLE:
@@ -555,50 +581,118 @@ void taskIR() {
   // If robot is veering to the right (left sensor touches reflective tape)
   if (*InfraredData & IR_L_SENSOR) {
       // Disable left motor, set right motor to 45% (turning left motion)
-      LeftMotorSpeed = MOTOR_MIN_SPEED;
-      RightMotorSpeed = 45;
+      LeftMotorSpeed =   MOTOR_MIN_SPEED;
+      RightMotorSpeed =  MOTOR_TURN_SPEED;
+
+      // Update direction
+      currentDirection = DIRECTION_RIGHT;
   }
 
   // If robot is veering to the left (right sensor touches reflective tape)
   else if (*InfraredData & IR_R_SENSOR) {
       // Disable right motor, set left motor to 45% (turning right motion)
-      RightMotorSpeed = MOTOR_MIN_SPEED;
-      LeftMotorSpeed = 45;
+      RightMotorSpeed =  MOTOR_MIN_SPEED;
+      LeftMotorSpeed =   MOTOR_TURN_SPEED;
+
+      // Update direction
+      currentDirection = DIRECTION_LEFT;
   }
 }
 
 // Update motor speeds
 void taskMotor() {
-  // TODO: Check if DHB1/PWM is initialized
+  // Initialize the motor controller ir we haven't already
+  if (!motorInitialized) {
+
+      // TODO: Call PWM.h method on DHB1_PWM_BASEADDR to initialize PWM
+      // TODO: Find PWM clock cycle value for our desired PWM frequency for the DHB1
+
+      // Allocate memory and initialize our PmodDHB1
+      MotorController = malloc(sizeof(PmodDHB1));
+      DHB1_begin(MotorController, DHB1_GPIO_BASEADDR, DHB1_PWM_BASEADDR,
+                CLK_FREQ, DHB1_PWM_PERIOD);
+
+      // Set motor direction forward, enable motors
+      DHB1_setDirs(MotorController, MOTOR_FORWARD, MOTOR_FORWARD);
+      DHB1_motorEnable(MotorController); 
+
+      // Initialize motor, set it at full speed initially
+      LeftMotorSpeed =   MOTOR_MAX_SPEED;
+      RightMotorSpeed =  MOTOR_MAX_SPEED;
+      motorInitialized = TRUE;
+  }
 
   // Set motor speed according to global vars
   DHB1_setMotorSpeeds(MotorController, LeftMotorSpeed, RightMotorSpeed);
+
+  // Set motor direction based on currentPivot
+  if (currentPivot == PIVOT_LEFT) {
+      DHB1_setDirs(MotorController, MOTOR_REVERSE, MOTOR_FORWARD);
+  }
+  else if (currentPivot == PIVOT_RIGHT) {
+      DHB1_setDirs(MotorController, MOTOR_FORWARD, MOTOR_REVERSE);
+  }
+  else {
+      DHB1_setDirs(MotorController, MOTOR_FORWARD, MOTOR_FORWARD);
+  }
 }
 
 // Take sonar measurements, stop robot if necessary
 void taskSonar() {
   // Get sonar distance
-  uint32_t distance = getSonarDistance();
+  uint32_t distance =     getSonarDistance();
+  _Bool hasBeenPivoting = obstacleDetected;
+
+  // Assume there is no obstacle unless we detect one
+  obstacleDetected =      FALSE;
 
   // If sonar distance is below the threshold, an obstacle is incoming (stop the robot pls)
   if (distance < SONAR_THRESHOLD_VALUE) {
-      LeftMotorSpeed = MOTOR_MIN_SPEED;
-      RightMotorSpeed = MOTOR_MIN_SPEED;
+      LeftMotorSpeed =    MOTOR_MIN_SPEED;
+      RightMotorSpeed =   MOTOR_MIN_SPEED;
 
-      // Update pivot flag to instruct robot to avoid obstacle
-      pivotRequired = TRUE;
+      // Woah man there's an obstacle
+      obstacleDetected =  TRUE;
+
+      // PIVOT_REQUIRED is used just so we give the robot a chance to stop before immediately pivoting
+      if (currentPivot == PIVOT_NONE) {
+          currentPivot = PIVOT_REQUIRED;
+      } else if (currentPivot == PIVOT_REQUIRED) {
+          currentPivot = PIVOT_LEFT; // pivot left by default. this will get changed in taskPivot if needed
+      }
+  }
+
+  // If our pivot manuever is complete/no more obstacle, resume robot at full speed
+  if (hasBeenPivoting && !obstacleDetected) {
+      currentPivot =    PIVOT_NONE;
+      LeftMotorSpeed =  MOTOR_MAX_SPEED;
+      RightMotorSpeed = MOTOR_MAX_SPEED;
   }
 }
 
 // Pivot and avoid obstacle
 void taskPivot() {
 
-  // README: more logic will be added later on to determine the correct direction to pivot, so we stay on the line
+  /// NOTE: Between this task and taskIR, taskIR is essentially ignored until taskSonar determines there is no longer an obstacle
+  /// We don't care about the line if there's an obstacle -- as long as the robot pivots in the direction of the line, it should be fine
 
-  // Disable left motor, set right motor to 45% (turning left motion)
-  LeftMotorSpeed = MOTOR_MIN_SPEED;
-  RightMotorSpeed = 45;
+  /// NOTE: There is a possibly issue I forsee with this task and taskIR, if the robot fully loses the line it will spin forever
+  /// Depending on testing we may need/may need not to add a failsafe/check for this. But for now it should be fine to let it be.
 
-  // TODO: Disable flag if pivot completed
-  //pivotRequired = FALSE;
+  // Exit this task early if we are on PIVOT_REQUIRED to allow our robot to stop (speed = MOTOR_MIN_SPEED) before making any pivots
+  if (currentPivot == PIVOT_REQUIRED) {
+      return;
+  }
+
+  // Set both motors at 45%
+  LeftMotorSpeed =  MOTOR_TURN_SPEED;
+  RightMotorSpeed = MOTOR_TURN_SPEED;
+
+  // Set pivot direction based on current direction robot is veering towards (robot always is veering away from line)
+  if (currentDirection == DIRECTION_LEFT) {
+      currentPivot = PIVOT_RIGHT;
+  }
+  else if (currentDirection == DIRECTION_RIGHT) {
+      currentPivot = PIVOT_LEFT;
+  }
 }
