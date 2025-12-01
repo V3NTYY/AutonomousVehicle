@@ -573,7 +573,7 @@ void taskSupervisor() {
   switch(currentState)
   {
     case STATE_IDLE:
-      state =                        STATE_SETTING_SPEED;   // Start FSM by going to motor task
+      currentState =                 STATE_SETTING_SPEED;   // Start FSM by going to motor task
       break;
 
     case STATE_SETTING_SPEED:
