@@ -6,6 +6,7 @@
 /****************** Include Files ********************/
 #include "xil_types.h"
 #include "xstatus.h"
+#include "xil_io.h"
 
 #define PMOD_DUAL_MAXSONAR_PWM_0_LOW_OFFSET 0
 #define PMOD_DUAL_MAXSONAR_PWM_0_HIGH_OFFSET 4

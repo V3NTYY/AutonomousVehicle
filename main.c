@@ -20,6 +20,7 @@
 #include "xil_cache.h"
 #include "xgpio.h"
 #include "xgpio_l.h"
+#include <sleep.h> 
 
 #include "Pmod_Dual_MAXSONAR.h"
 #include "PWM.h"
@@ -54,51 +55,51 @@
 #define SWITCHES_REG (unsigned *)(SWITCHES_BASE_ADDR)
 
 #define GPIO_DEVICE_ID 0 
-#define XPAR_AXI_GPIO_0_INTERRUPTS 0x2001
+//#define XPAR_AXI_GPIO_0_INTERRUPTS 0x2001
 
 /// Frequency defines
-#define CLK_FREQ              81247000
-#define DHB1_PWM_PERIOD       0x2   // 2 ms period
+#define CLK_FREQ            81247000
+#define DHB1_PWM_PERIOD     0x2   // 2 ms period
 
 /// Timer and load value defines
-#define LOAD_VALUE            40624 // ~0.5ms period (0.5000012 closer to actual)
-#define TIMER_PERIOD_US       500   // Timer period in microseconds (500 us = 0.5 ms)
+#define LOAD_VALUE          40624 // ~0.5ms period (0.5000012 closer to actual)
+#define TIMER_PERIOD_US     500   // Timer period in microseconds (500 us = 0.5 ms)
 
 /// Interrupt and timer ID defines
-#define TMRCTR_DEVICE_ID      XPAR_TMRCTR_0_DEVICE_ID
-#define TMRCTR_INTERRUPT_ID   XPAR_FABRIC_XTMRCTR_0_INTR
-#define INTC_DEVICE_ID        XPAR_INTC_0_DEVICE_ID
-#define GPIO_INTERRUPT_ID     XPAR_FABRIC_XGPIO_0_INTR
+#define TMRCTR_DEVICE_ID    XPAR_TMRCTR_0_DEVICE_ID
+#define TMRCTR_INTERRUPT_ID XPAR_FABRIC_XTMRCTR_0_INTR
+#define INTC_DEVICE_ID      XPAR_INTC_0_DEVICE_ID
+#define GPIO_INTERRUPT_ID XPAR_FABRIC_XGPIO_0_INTR
 
 /// Motor defines
-#define MOTOR_FORWARD         0   // this is just a guess. if forward != 0, then its 1
-#define MOTOR_REVERSE         1   // this is just a guess. if reverse != 1, then its 0
-#define MOTOR_MAX_SPEED       100
-#define MOTOR_MIN_SPEED       0
-#define MOTOR_TURN_SPEED      45  // speed to set when turning
+#define MOTOR_FORWARD           0 // this is just a guess. if forward != 0, then its 1
+#define MOTOR_REVERSE           1 // this is just a guess. if reverse != 1, then its 0
+#define MOTOR_MAX_SPEED         100
+#define MOTOR_MIN_SPEED         0
+#define MOTOR_TURN_SPEED        45
 
-#define SONAR_THRESHOLD_VALUE 68000
+#define SONAR_THRESHOLD_VALUE   7
 
 ////////////////////////////////////////////////////////////////////////////////////
 /// FUNCTION PROTOTYPES
 
 /// ISR and delay functions
-//void timer_ISR(void *CallBackRef, u8 TmrCtrNumber);
-void delay(int ms);
+void        timer_ISR(void *CallBackRef, u8 TmrCtrNumber);
+void        delay(int ms);
 
 /// Helper functions
-int      platform_init();
-void     executionFailed();
-void     setupTasks();
-void     setupPWM();
-uint32_t getSonarDistance();
+int         platform_init();
+void        executionFailed();
+void        setupTasks();
+void        setupMotor();
+uint32_t    getSonarDistance();
 
 /// Tasks
-void     taskSupervisor();
-void     taskSonar();
-void     taskIR();
-void     taskMotor();
-void     taskPivot();
+void        taskSupervisor();
+void        taskSonar();
+void        taskIR();
+void        taskMotor();
+void        taskPivot();
 
 ////////////////////////////////////////////////////////////////////////////////////
 /// Enums, structs and global variables
@@ -137,9 +138,9 @@ typedef enum
 // Enumerated type for determining vehicle direction (undetermined if we haven't triggered IR yet, left if robot is veering left, right if veering right)
 typedef enum
 {
-  DIRECTION_UNDETERMINED,
-  DIRECTION_LEFT,
-  DIRECTION_RIGHT
+    DIRECTION_UNDETERMINED,
+    DIRECTION_LEFT,
+    DIRECTION_RIGHT
 } direction;
 
 // Task Control Block (TCB) structure
@@ -151,28 +152,34 @@ typedef struct
 } TCB_t;
 
 // Task queue
-TCB_t     *queue[MAX_TASKS];
+TCB_t       *queue[MAX_TASKS];
 
 // Timer counter -- multiply by TIMER_PERIOD_US to get time elapsed since system boot in microseconds
-uint32_t  SystemCount;
+uint32_t    SystemCount;
+uint32_t    final_time;
 
-// State variable and flags
-state     currentState;
-pivot     currentPivot;
-direction currentDirection;
-_Bool     motorInitialized;
-_Bool     obstacleDetected;
+// State variable
+state       currentState;
+pivot       currentPivot;
+direction   currentDirection;
+_Bool       motorInitialized;
+_Bool       sonarInitialized;
+_Bool       obstacleDetected;
 
 // Motor Controller, Global Speed Variables
-PmodDHB1* MotorController;
-u8        LeftMotorSpeed;   // This variable's value will be constantly applied to the left motor
-u8        RightMotorSpeed;  // This variable's value will be constantly applied to the right motor
+PmodDHB1*   MotorController;
+u8          LeftMotorSpeed;          // This variable's value will be constantly applied to the left motor
+u8          RightMotorSpeed;         // This variable's value will be constantly applied to the right motor
+
+// Sonar instance
+PMOD_DUAL_MAXSONAR sonar = {Dual_MAXSONAR_0_BASEADDR + MAXSONAR_CHANNEL_1_OFFSET, CLK_FREQ, 0};
 
 // Hardware instances
 XIntc InterruptController;  // Instance of the Interrupt Controller
 XTmrCtr Timer;              // Instance of the Timer
 XGpio lightGpio;            // Instance of the AXI_GPIO_2
 XGpio LEDGpio; 
+XGpio DHB1Gpio;
 
 ////////////////////////////////////////////////////////////////////////////////////
 /// ISRs and Delay functions
@@ -192,83 +199,38 @@ void timer_ISR(void *CallBackRef, u8 TmrCtrNumber)
 }
 
 void delay(int ms){
-  static int count;
-  count = ms;
-
-  // TODO: implement delay based on..?
+  final_time = SystemCount + ms;
+  while(1){
+    if(SystemCount == final_time){
+        break;
+    }
+  }
+  
 }
 
 ////////////////////////////////////////////////////////////////////////////////////
-/// SENSOR HELPER FUNCTIONS
+/// OLDER TEST FUNCTIONS
 
-/*---------------------------------------------------------------------------------------
-    getSonarDistance()
+// void testLightSensors() {
+//   // Get reference infrared sensor registers
+//   volatile u32 *InfraredData =        (u32 *)LS1_BASEADDR + XGPIO_DATA_OFFSET;
+//   volatile u32 *InfraredTristateReg = (u32 *)LS1_BASEADDR + XGPIO_TRI_OFFSET;
 
-        gets the raw sensor value from the two sonar sensors, averages it, then puts that
-        average into a simple moving average for filtering.
+//   *InfraredTristateReg = 0xF;
 
----------------------------------------------------------------------------------------*/
+//   while (1)
+// 	{
+// 		if (*InfraredData & IR_L_SENSOR) // left sensor touched the reflective tape
+// 			xil_printf("left!\r");
 
-// uint32_t getSonarDistance() {
-//     static uint32_t movingAvgData[4] = {0};
-//     static uint32_t staleIndex = 0;
-//     static _Bool isFull = FALSE;
+// 		if (*InfraredData & IR_R_SENSOR) // right sensor touched the reflective tape
+// 			xil_printf("right!\r");
 
-//     uint32_t dist = MAXSONAR_getDistance(&sonar, 1);
-//     uint32_t dist2 = MAXSONAR_getDistance(&sonar, 2);
-
-//     movingAvgData[staleIndex] = ((dist + dist2) / 2);
-//     staleIndex = (staleIndex + 1) % 4;
-
-//     if (staleIndex == 0) {
-//         isFull = TRUE;
-//     }
-
-//     if (!isFull) {
-//         return (SONAR_THRESHOLD_VALUE + 1000);
-//     }
-//     else {
-//         uint32_t sma = 0;
-//         for (int i = 0; i < 4; i++) {
-//             sma += movingAvgData[i];
-//         }
-//         sma = sma / 4;
-//         return sma;
-//     }
-//}
-
-void setupPWM() {
-    // TODO: PWM setup.
-
-    // TODO: include MotorFeedback.h somehow?
-}
-
-////////////////////////////////////////////////////////////////////////////////////
-/// TEST FUNCTIONS
-
-void testLightSensors() {
-  // Get reference infrared sensor registers
-  volatile u32 *InfraredData =        (u32 *)LS1_BASEADDR + XGPIO_DATA_OFFSET;
-  volatile u32 *InfraredTristateReg = (u32 *)LS1_BASEADDR + XGPIO_TRI_OFFSET;
-
-  // Set infrared sensor as input
-  *InfraredTristateReg = 0xF;
-
-  while (1) {
-		if (*InfraredData & IR_L_SENSOR) // left sensor touched the reflective tape
-			xil_printf("left!\r");
-
-		if (*InfraredData & IR_R_SENSOR) // right sensor touched the reflective tape
-			xil_printf("right!\r");
-
-		xil_printf("0x%08x\r", *InfraredData);
-	}
-}
+// 		xil_printf("0x%08x\r", *InfraredData);
+// 	}
+// }
 
 void testSonar(unsigned int* rgbLEDsData) {
-  // Initialize sonar instances
-  PMOD_DUAL_MAXSONAR sonar = {Dual_MAXSONAR_0_BASEADDR + MAXSONAR_CHANNEL_1_OFFSET, CLK_FREQ, 0};
-
   // Start sonar instances
   MAXSONAR_begin(&sonar, Dual_MAXSONAR_0_BASEADDR, CLK_FREQ);
 
@@ -280,34 +242,111 @@ void testSonar(unsigned int* rgbLEDsData) {
     // we need to test and see what it actually is.
 
     u64 distance0 = MAXSONAR_getDistance(&sonar, MAXSONAR_1);
-    u64 distance1 = MAXSONAR_getDistance(&sonar, MAXSONAR_2);
+    //u64 distance1 = MAXSONAR_getDistance(&sonar, MAXSONAR_2); DOES NOT WORK, clk_edges = 00
+    //xil_printf("%d\n", distance1);
 
-    if(distance0 >= SONAR_THRESHOLD_VALUE){
+    if(distance0 < SONAR_THRESHOLD_VALUE){
       *rgbLEDsData = *rgbLEDsData | 0b0000000000100;  
-    }
-    if(distance1 >= SONAR_THRESHOLD_VALUE){
-      *rgbLEDsData = *rgbLEDsData | 0b0000000100000;  
+    } else if (distance0 >= SONAR_THRESHOLD_VALUE){
+      *rgbLEDsData = *rgbLEDsData & 0b111111111000;  
     }
     
   }
 }
 
-void testMotor() {
+/// NOTE: This is the old testMotor() function you wrote! The new motor code is in setupMotor()
+// void testMotor() {
+//     DHB1_GPIO_Initialize(&DHB1Gpio, DHB1_GPIO_BASEADDR);
+//     XGpio_SetDataDirection(&DHB1Gpio, 1, 0xC);
+//     XGpio_SetDataDirection(&DHB1Gpio, 2, 0xC);
+//     DHB1_begin(MotorController, DHB1_GPIO_BASEADDR, DHB1_PWM_BASEADDR,
+//                 CLK_FREQ, DHB1_PWM_PERIOD);
+  
+//     DHB1_motorEnable(MotorController);
+//     DHB1_setDirs(MotorController, MOTOR_FORWARD, MOTOR_FORWARD);
+//     delay(100);
+//     //usleep(1000);
+    
+//     DHB1_setMotorSpeeds(MotorController, MOTOR_MAX_SPEED, MOTOR_MAX_SPEED);
+
+//     for(int i = 0; i < 20; i++){
+//       delay(1000);
+//       xil_printf("GPIO1 = %08x\n", XGpio_DiscreteRead(&DHB1Gpio, 1));
+//       xil_printf("GPIO2 = %08x\n", XGpio_DiscreteRead(&DHB1Gpio, 2));
+//     }
+
+//     DHB1_motorDisable(MotorController);
+// }
+
+////////////////////////////////////////////////////////////////////////////////////
+/// ROBOT & SENSOR HELPER FUNCTIONS
+
+/*---------------------------------------------------------------------------------------
+    getSonarDistance()
+
+        gets the raw sensor value from the two sonar sensors, averages it, then puts that
+        average into a simple moving average for filtering.
+
+---------------------------------------------------------------------------------------*/
+uint32_t getSonarDistance() {
+    static uint32_t movingAvgData[4] = {0};
+    static uint32_t staleIndex = 0;
+    static _Bool isFull = FALSE;
+
+    uint32_t dist = MAXSONAR_getDistance(&sonar, 1);
+    uint32_t dist2 = MAXSONAR_getDistance(&sonar, 2);
+
+    movingAvgData[staleIndex] = ((dist + dist2) / 2);
+    staleIndex = (staleIndex + 1) % 4;
+
+    if (staleIndex == 0) {
+        isFull = TRUE;
+    }
+
+    if (!isFull) {
+        return (SONAR_THRESHOLD_VALUE + 1000);
+    }
+    else {
+        uint32_t sma = 0;
+        for (int i = 0; i < 4; i++) {
+            sma += movingAvgData[i];
+        }
+        sma = sma / 4;
+        return sma;
+    }
+}
+
+/// Motor initialization function
+void setupMotor() {
+    // Enable PWM and set period
+    PWM_Enable(DHB1_PWM_BASEADDR);
+    PWM_Set_Period(DHB1_PWM_BASEADDR, DHB1_PWM_PERIOD);
+
+    // Allocate memory and initialize PmodDHB1/motor controller
+    MotorController = malloc(sizeof(PmodDHB1));
     DHB1_begin(MotorController, DHB1_GPIO_BASEADDR, DHB1_PWM_BASEADDR,
                 CLK_FREQ, DHB1_PWM_PERIOD);
-
     DHB1_motorEnable(MotorController);
+
+    // Initialize direction and speed to forward&0 at start
     DHB1_setDirs(MotorController, MOTOR_FORWARD, MOTOR_FORWARD);
-    
-    DHB1_setMotorSpeeds(MotorController, MOTOR_MAX_SPEED, MOTOR_MAX_SPEED);
-    DHB1_motorDisable(MotorController);
+    DHB1_setMotorSpeeds(MotorController, MOTOR_MIN_SPEED, MOTOR_MIN_SPEED);
+}
+
+/// SONAR initialization function
+void setupSonar() {
+  // Start sonar instances
+  MAXSONAR_begin(&sonar, Dual_MAXSONAR_0_BASEADDR, CLK_FREQ);
+
+  // Nothing else needed...?
 }
 
 ////////////////////////////////////////////////////////////////////////////////////
 /// HARDWARE INITIALIZATION
 
 /// Timer, Interrupt Controller and lightGPIO Initialization
-int platform_init() {
+int platform_init()
+{
   int status = XST_FAILURE;
 
   // Initialize the GPIO instances
@@ -424,14 +463,15 @@ int platform_init() {
 }
 
 /// Function that is called when hardware couldn't be initialized (via platform_init())
-void executionFailed() {
+void executionFailed()
+{
   xil_printf("Execution Failed");
   // trap the program in an infinite loop
   while (1);
 }
 
 ////////////////////////////////////////////////////////////////////////////////////
-/// SETUP TASK FUNCTIONS
+/// MISC FUNCTIONS
 
 /// Setup task queue
 void setupTasks() {
@@ -469,25 +509,28 @@ void setupTasks() {
 ////////////////////////////////////////////////////////////////////////////////////
 /// MAIN FUNCTION
 
-/// RGB LED data & tri
+// RGB LED data & tri
 unsigned *rgbLEDsData =             RBG_LEDS_REG;
 unsigned *rgbLEDsTri =              RBG_LEDS_REG + 1;
-/// Infrared data & tri
+// Infrared data & tri
 volatile u32 *InfraredData =        (u32 *)LS1_BASEADDR + XGPIO_DATA_OFFSET;
 volatile u32 *InfraredTristateReg = (u32 *)LS1_BASEADDR + XGPIO_TRI_OFFSET;
 
 int main(int argc, char const *argv[])
 {
-  // Initialize timer counter, motor speeds, state, and tristate registers
-  SystemCount =           0;
-  motorInitialized =      FALSE;
-  obstacleDetected =      FALSE;
-  LeftMotorSpeed =        MOTOR_MIN_SPEED;
-  RightMotorSpeed =       MOTOR_MIN_SPEED;
-  currentState =          STATE_IDLE;
-  currentPivot =          PIVOT_NONE;
-  *InfraredTristateReg =  0xF;
-  *rgbLEDsTri =           0x0;
+  // Initialize timer counter, motor speeds, state, tristate registers
+  SystemCount =             0;
+  final_time =              0;
+  motorInitialized =        FALSE;
+  sonarInitialized =        FALSE;
+  obstacleDetected =        FALSE;
+  LeftMotorSpeed =          MOTOR_MIN_SPEED;
+  RightMotorSpeed =         MOTOR_MIN_SPEED;
+  currentState =            STATE_IDLE;
+  currentPivot =            PIVOT_NONE;
+  currentDirection =        DIRECTION_UNDETERMINED;
+  *InfraredTristateReg =    0xF;
+  *rgbLEDsTri =             0x0;
 
   // Setup the GPIO, Interrupt Controller and Timer
   int status = XST_FAILURE;
@@ -499,27 +542,25 @@ int main(int argc, char const *argv[])
   }
 
   // Initialize task queue and all of its tasks
-  //setupTasks();
-
-  testSonar(rgbLEDsData);
+  setupTasks();
 
   // Main loop
-  //while (1)
-  //{
+  while (1)
+  {
     // Iterate through task queue, execute 'ready' tasks
-    // for (int i = 0; i < MAX_TASKS; i++)
-    // {
-    //   // Execute tasks that are only 'ready'
-    //   if (queue[i]->taskReady)
-    //   {
-    //     // Execute the task
-    //     (*(queue[i]->taskPtr))(queue[i]->taskDataPtr);
+    for (int i = 0; i < MAX_TASKS; i++)
+    {
+      // Execute tasks that are only 'ready'
+      if (queue[i]->taskReady)
+      {
+        // Execute the task
+        (*(queue[i]->taskPtr))(queue[i]->taskDataPtr);
 
-    //     // Reset the task ready flag
-    //     queue[i]->taskReady = 0;
-    //   }
-    // }
-  //}
+        // Reset the task ready flag
+        queue[i]->taskReady = 0;
+      }
+    }
+  }
 
   return 0;
 }
@@ -532,15 +573,7 @@ void taskSupervisor() {
   switch(currentState)
   {
     case STATE_IDLE:
-
-      /// STATE_IDLE LOGIC ///
-        // look for some activation signal (i.e. button press, idk man)
-        // start round-robin FSM like so:
-        //currentState = STATE_SETTING_SPEED;
-      /// END OF LOGIC ///
-
-      /// TEST CODE BELOW
-      queue[TASK_SONAR]->taskReady = TRUE;
+      state =                        STATE_SETTING_SPEED;   // Start FSM by going to motor task
       break;
 
     case STATE_SETTING_SPEED:
@@ -603,22 +636,7 @@ void taskIR() {
 void taskMotor() {
   // Initialize the motor controller ir we haven't already
   if (!motorInitialized) {
-
-      // TODO: Call PWM.h method on DHB1_PWM_BASEADDR to initialize PWM
-      // TODO: Find PWM clock cycle value for our desired PWM frequency for the DHB1
-
-      // Allocate memory and initialize our PmodDHB1
-      MotorController = malloc(sizeof(PmodDHB1));
-      DHB1_begin(MotorController, DHB1_GPIO_BASEADDR, DHB1_PWM_BASEADDR,
-                CLK_FREQ, DHB1_PWM_PERIOD);
-
-      // Set motor direction forward, enable motors
-      DHB1_setDirs(MotorController, MOTOR_FORWARD, MOTOR_FORWARD);
-      DHB1_motorEnable(MotorController); 
-
-      // Initialize motor, set it at full speed initially
-      LeftMotorSpeed =   MOTOR_MAX_SPEED;
-      RightMotorSpeed =  MOTOR_MAX_SPEED;
+      setupMotor();
       motorInitialized = TRUE;
   }
 
@@ -639,6 +657,13 @@ void taskMotor() {
 
 // Take sonar measurements, stop robot if necessary
 void taskSonar() {
+
+  // Setup sonar
+  if (!sonarInitialized) {
+      setupSonar();
+      sonarInitialized = TRUE;
+  }
+
   // Get sonar distance
   uint32_t distance =     getSonarDistance();
   _Bool hasBeenPivoting = obstacleDetected;
