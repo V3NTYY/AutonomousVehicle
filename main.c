@@ -479,13 +479,13 @@ void setupTasks() {
   queue[TASK_SUPERVISOR] =              malloc(sizeof(TCB_t));
   queue[TASK_SUPERVISOR]->taskPtr =     taskSupervisor;
   queue[TASK_SUPERVISOR]->taskDataPtr = NULL;
-  queue[TASK_SUPERVISOR]->taskReady =   FALSE;
+  queue[TASK_SUPERVISOR]->taskReady =   TRUE;
 
   // Task 1: taskSonar
   queue[TASK_SONAR] =                   malloc(sizeof(TCB_t));
   queue[TASK_SONAR]->taskPtr =          taskSonar;
   queue[TASK_SONAR]->taskDataPtr =      NULL;
-  queue[TASK_SONAR]->taskReady =        TRUE;
+  queue[TASK_SONAR]->taskReady =        FALSE;
 
   // Task 2: taskIR
   queue[TASK_IR] =                      malloc(sizeof(TCB_t));
