@@ -76,7 +76,7 @@
 #define MOTOR_REVERSE           1 // this is just a guess. if reverse != 1, then its 0
 #define MOTOR_MAX_SPEED         100
 #define MOTOR_MIN_SPEED         0
-#define MOTOR_TURN_SPEED        45
+#define MOTOR_TURN_SPEED        80
 
 #define SONAR_THRESHOLD_VALUE   7
 
@@ -92,14 +92,12 @@ int         platform_init();
 void        executionFailed();
 void        setupTasks();
 void        setupMotor();
-uint32_t    getSonarDistance();
 
 /// Tasks
 void        taskSupervisor();
 void        taskSonar();
 void        taskIR();
 void        taskMotor();
-void        taskPivot();
 
 ////////////////////////////////////////////////////////////////////////////////////
 /// Enums, structs and global variables
@@ -111,7 +109,6 @@ typedef enum
   TASK_SONAR,
   TASK_IR,
   TASK_MOTOR,
-  TASK_PIVOT,
   MAX_TASKS
 } task_t;
 
@@ -122,18 +119,8 @@ typedef enum
   STATE_SETTING_SPEED,
   STATE_MEASURE_SONAR,
   STATE_MEASURE_IR,
-  STATE_PIVOT_OBSTACLE,
   MAX_STATES
 } state;
-
-// Enumerated type for pivoting (we aren't pivoting, are we beginning pivoting, pivoting left, pivoting right)
-typedef enum
-{
-  PIVOT_NONE,
-  PIVOT_REQUIRED,
-  PIVOT_LEFT,
-  PIVOT_RIGHT
-} pivot;
 
 // Enumerated type for determining vehicle direction (undetermined if we haven't triggered IR yet, left if robot is veering left, right if veering right)
 typedef enum
@@ -160,7 +147,6 @@ uint32_t    final_time;
 
 // State variable
 state       currentState;
-pivot       currentPivot;
 direction   currentDirection;
 _Bool       motorInitialized;
 _Bool       sonarInitialized;
@@ -173,6 +159,10 @@ u8          RightMotorSpeed;         // This variable's value will be constantly
 
 // Sonar instance
 PMOD_DUAL_MAXSONAR sonar = {Dual_MAXSONAR_0_BASEADDR + MAXSONAR_CHANNEL_1_OFFSET, CLK_FREQ, 0};
+
+// RGB LED data & tri
+unsigned *rgbLEDsData =             RBG_LEDS_REG;
+unsigned *rgbLEDsTri =              RBG_LEDS_REG + 1;
 
 // Hardware instances
 XIntc InterruptController;  // Instance of the Interrupt Controller
@@ -211,48 +201,42 @@ void delay(int ms){
 ////////////////////////////////////////////////////////////////////////////////////
 /// OLDER TEST FUNCTIONS
 
-// void testLightSensors() {
-//   // Get reference infrared sensor registers
-//   volatile u32 *InfraredData =        (u32 *)LS1_BASEADDR + XGPIO_DATA_OFFSET;
-//   volatile u32 *InfraredTristateReg = (u32 *)LS1_BASEADDR + XGPIO_TRI_OFFSET;
+void testLightSensors() {
+  // Get reference infrared sensor registers
 
-//   *InfraredTristateReg = 0xF;
+  
+  if(XGpio_DiscreteRead(&lightGpio, IR_L_SENSOR)) { 
+    *rgbLEDsData = *rgbLEDsData | 0b111000111111; 
+  }
 
-//   while (1)
-// 	{
-// 		if (*InfraredData & IR_L_SENSOR) // left sensor touched the reflective tape
-// 			xil_printf("left!\r");
-
-// 		if (*InfraredData & IR_R_SENSOR) // right sensor touched the reflective tape
-// 			xil_printf("right!\r");
-
-// 		xil_printf("0x%08x\r", *InfraredData);
-// 	}
-// }
-
-void testSonar(unsigned int* rgbLEDsData) {
-  // Start sonar instances
-  MAXSONAR_begin(&sonar, Dual_MAXSONAR_0_BASEADDR, CLK_FREQ);
-
-  while (1)
-  {
-    // NOTE:
-    // The lab8 doc on HThreads notes that getDistance returns the value in inches
-    // However, the original lab8 example that uses getDistance implies its in cm
-    // we need to test and see what it actually is.
-
-    u64 distance0 = MAXSONAR_getDistance(&sonar, MAXSONAR_1);
-    //u64 distance1 = MAXSONAR_getDistance(&sonar, MAXSONAR_2); DOES NOT WORK, clk_edges = 00
-    //xil_printf("%d\n", distance1);
-
-    if(distance0 < SONAR_THRESHOLD_VALUE){
-      *rgbLEDsData = *rgbLEDsData | 0b0000000000100;  
-    } else if (distance0 >= SONAR_THRESHOLD_VALUE){
-      *rgbLEDsData = *rgbLEDsData & 0b111111111000;  
-    }
-    
+  if(XGpio_DiscreteRead(&lightGpio, IR_R_SENSOR)) { 
+    *rgbLEDsData = *rgbLEDsData | 0b000111111111; 
   }
 }
+
+// void testSonar(unsigned int* rgbLEDsData) {
+//   // Start sonar instances
+//   MAXSONAR_begin(&sonar, Dual_MAXSONAR_0_BASEADDR, CLK_FREQ);
+
+//   while (1)
+//   {
+//     // NOTE:
+//     // The lab8 doc on HThreads notes that getDistance returns the value in inches
+//     // However, the original lab8 example that uses getDistance implies its in cm
+//     // we need to test and see what it actually is.
+
+//     u64 distance0 = MAXSONAR_getDistance(&sonar, MAXSONAR_1);
+//     //u64 distance1 = MAXSONAR_getDistance(&sonar, MAXSONAR_2); DOES NOT WORK, clk_edges = 00
+//     //xil_printf("%d\n", distance1);
+
+//     if(distance0 < SONAR_THRESHOLD_VALUE){
+//       *rgbLEDsData = *rgbLEDsData | 0b0000000000100;  
+//     } else if (distance0 >= SONAR_THRESHOLD_VALUE){
+//       *rgbLEDsData = *rgbLEDsData & 0b111111111000;  
+//     }
+    
+//   }
+// }
 
 /// NOTE: This is the old testMotor() function you wrote! The new motor code is in setupMotor()
 // void testMotor() {
@@ -281,41 +265,6 @@ void testSonar(unsigned int* rgbLEDsData) {
 ////////////////////////////////////////////////////////////////////////////////////
 /// ROBOT & SENSOR HELPER FUNCTIONS
 
-/*---------------------------------------------------------------------------------------
-    getSonarDistance()
-
-        gets the raw sensor value from the two sonar sensors, averages it, then puts that
-        average into a simple moving average for filtering.
-
----------------------------------------------------------------------------------------*/
-uint32_t getSonarDistance() {
-    static uint32_t movingAvgData[4] = {0};
-    static uint32_t staleIndex = 0;
-    static _Bool isFull = FALSE;
-
-    uint32_t dist = MAXSONAR_getDistance(&sonar, 1);
-    uint32_t dist2 = MAXSONAR_getDistance(&sonar, 2);
-
-    movingAvgData[staleIndex] = ((dist + dist2) / 2);
-    staleIndex = (staleIndex + 1) % 4;
-
-    if (staleIndex == 0) {
-        isFull = TRUE;
-    }
-
-    if (!isFull) {
-        return (SONAR_THRESHOLD_VALUE + 1000);
-    }
-    else {
-        uint32_t sma = 0;
-        for (int i = 0; i < 4; i++) {
-            sma += movingAvgData[i];
-        }
-        sma = sma / 4;
-        return sma;
-    }
-}
-
 /// Motor initialization function
 void setupMotor() {
     // Enable PWM and set period
@@ -329,8 +278,10 @@ void setupMotor() {
     DHB1_motorEnable(MotorController);
 
     // Initialize direction and speed to forward&0 at start
+    LeftMotorSpeed =  MOTOR_MAX_SPEED ;
+    RightMotorSpeed = MOTOR_MAX_SPEED - 20;
     DHB1_setDirs(MotorController, MOTOR_FORWARD, MOTOR_FORWARD);
-    DHB1_setMotorSpeeds(MotorController, MOTOR_MIN_SPEED, MOTOR_MIN_SPEED);
+    DHB1_setMotorSpeeds(MotorController, LeftMotorSpeed, RightMotorSpeed);
 }
 
 /// SONAR initialization function
@@ -360,27 +311,8 @@ int platform_init()
   // Set GPIO_0 CHANNEL 2 as input
   XGpio_SetDataDirection(&lightGpio, 0x2, 0xF);
 
-  // Set GPIO_1 CHANNEL 1 as output
+  // Set GPIO_1 CHANNEL 1 as input
   XGpio_SetDataDirection(&lightGpio, 0x1, 0xF);
-
-  status = XGpio_SelfTest(&lightGpio);
-  if(status != XST_SUCCESS){
-      xil_printf("GPIO SelfTest Failed! Execution stopped.\n");
-      executionFailed();
-  }
-
-  status = XGpio_Initialize(&LEDGpio, LS1_BASEADDR);
-  if (status != XST_SUCCESS)
-  {
-    xil_printf("Failed to initialize GPIO_2! Execution stopped.\n");
-    executionFailed();
-  }
-
-  // Set GPIO_0 CHANNEL 2 as input
-  XGpio_SetDataDirection(&LEDGpio, 0x1, 0x00);
-
-  // Set GPIO_1 CHANNEL 1 as output
-  XGpio_SetDataDirection(&LEDGpio, 0x2, 0xFF);
 
   status = XGpio_SelfTest(&lightGpio);
   if(status != XST_SUCCESS){
@@ -498,23 +430,10 @@ void setupTasks() {
   queue[TASK_MOTOR]->taskPtr =          taskMotor;
   queue[TASK_MOTOR]->taskDataPtr =      NULL;
   queue[TASK_MOTOR]->taskReady =        FALSE;
-
-  // Task 4: taskPivot
-  queue[TASK_PIVOT] =                   malloc(sizeof(TCB_t));
-  queue[TASK_PIVOT]->taskPtr =          taskPivot;
-  queue[TASK_PIVOT]->taskDataPtr =      NULL;
-  queue[TASK_PIVOT]->taskReady =        FALSE;
 }
 
 ////////////////////////////////////////////////////////////////////////////////////
 /// MAIN FUNCTION
-
-// RGB LED data & tri
-unsigned *rgbLEDsData =             RBG_LEDS_REG;
-unsigned *rgbLEDsTri =              RBG_LEDS_REG + 1;
-// Infrared data & tri
-volatile u32 *InfraredData =        (u32 *)LS1_BASEADDR + XGPIO_DATA_OFFSET;
-volatile u32 *InfraredTristateReg = (u32 *)LS1_BASEADDR + XGPIO_TRI_OFFSET;
 
 int main(int argc, char const *argv[])
 {
@@ -524,12 +443,8 @@ int main(int argc, char const *argv[])
   motorInitialized =        FALSE;
   sonarInitialized =        FALSE;
   obstacleDetected =        FALSE;
-  LeftMotorSpeed =          MOTOR_MIN_SPEED;
-  RightMotorSpeed =         MOTOR_MIN_SPEED;
   currentState =            STATE_IDLE;
-  currentPivot =            PIVOT_NONE;
   currentDirection =        DIRECTION_UNDETERMINED;
-  *InfraredTristateReg =    0xF;
   *rgbLEDsTri =             0x0;
 
   // Setup the GPIO, Interrupt Controller and Timer
@@ -540,6 +455,8 @@ int main(int argc, char const *argv[])
     xil_printf("Failed to initialize the platform! Execution stopped.\n");
     executionFailed();
   }
+
+  // testLightSensors();
 
   // Initialize task queue and all of its tasks
   setupTasks();
@@ -591,15 +508,6 @@ void taskSupervisor() {
     case STATE_MEASURE_SONAR:
       queue[TASK_SONAR]->taskReady = TRUE;                  // Measure SONAR (are we hitting an obstacle)
       currentState =                 STATE_SETTING_SPEED;   // next task is setting speed
-
-      // If there's an obstacle, PIVOT
-      if (obstacleDetected)
-        currentState =               STATE_PIVOT_OBSTACLE;  // next task is pivoting to avoid obstacle
-      break;
-
-    case STATE_PIVOT_OBSTACLE:
-      queue[TASK_PIVOT]->taskReady = TRUE;                  // Pivot to avoid obstacle
-      currentState =                 STATE_SETTING_SPEED;   // next task is setting speed after pivot
       break;
 
     default:
@@ -611,21 +519,28 @@ void taskSupervisor() {
 
 // Take infrared measurements, adjust speed accordingly
 void taskIR() {
-  // If robot is veering to the right (left sensor touches reflective tape)
-  if (*InfraredData & IR_L_SENSOR) {
+
+  volatile u32* LS1_Register = (volatile u32*) LS1_BASEADDR;
+  u32 LS1_Value = *LS1_Register;
+  *rgbLEDsData = LS1_Value;
+  
+  // // If robot is veering to the right (left sensor touches reflective tape) 
+  if (LS1_Value == 0b000000000010) {
       // Disable left motor, set right motor to 45% (turning left motion)
-      LeftMotorSpeed =   MOTOR_MIN_SPEED;
+      LeftMotorSpeed =   MOTOR_MAX_SPEED;
       RightMotorSpeed =  MOTOR_TURN_SPEED;
+      // *rgbLEDsData = *rgbLEDsData | 0b100000000000; 
 
       // Update direction
       currentDirection = DIRECTION_RIGHT;
   }
 
   // If robot is veering to the left (right sensor touches reflective tape)
-  else if (*InfraredData & IR_R_SENSOR) {
+  else if (LS1_Value == 0b000000000001) {
       // Disable right motor, set left motor to 45% (turning right motion)
-      RightMotorSpeed =  MOTOR_MIN_SPEED;
-      LeftMotorSpeed =   MOTOR_TURN_SPEED;
+      RightMotorSpeed =  MOTOR_MAX_SPEED;
+      LeftMotorSpeed =   MOTOR_TURN_SPEED -30;
+      // *rgbLEDsData = *rgbLEDsData | 0b000100000000; 
 
       // Update direction
       currentDirection = DIRECTION_LEFT;
@@ -640,19 +555,14 @@ void taskMotor() {
       motorInitialized = TRUE;
   }
 
+  // Kill robot movement if sonar has an obstacle detected currently
+  if (obstacleDetected) {
+      LeftMotorSpeed = MOTOR_MIN_SPEED;
+      RightMotorSpeed = MOTOR_MIN_SPEED;
+  }
+
   // Set motor speed according to global vars
   DHB1_setMotorSpeeds(MotorController, LeftMotorSpeed, RightMotorSpeed);
-
-  // Set motor direction based on currentPivot
-  if (currentPivot == PIVOT_LEFT) {
-      DHB1_setDirs(MotorController, MOTOR_REVERSE, MOTOR_FORWARD);
-  }
-  else if (currentPivot == PIVOT_RIGHT) {
-      DHB1_setDirs(MotorController, MOTOR_FORWARD, MOTOR_REVERSE);
-  }
-  else {
-      DHB1_setDirs(MotorController, MOTOR_FORWARD, MOTOR_FORWARD);
-  }
 }
 
 // Take sonar measurements, stop robot if necessary
@@ -661,63 +571,29 @@ void taskSonar() {
   // Setup sonar
   if (!sonarInitialized) {
       setupSonar();
-      sonarInitialized = TRUE;
+      sonarInitialized =  TRUE;
   }
 
   // Get sonar distance
-  uint32_t distance =     getSonarDistance();
-  _Bool hasBeenPivoting = obstacleDetected;
+  uint32_t distance =     MAXSONAR_getDistance(&sonar, MAXSONAR_1);
+  //uint32_t distance1 =    MAXSONAR_getDistance(&sonar, MAXSONAR_2);
 
   // Assume there is no obstacle unless we detect one
   obstacleDetected =      FALSE;
 
   // If sonar distance is below the threshold, an obstacle is incoming (stop the robot pls)
   if (distance < SONAR_THRESHOLD_VALUE) {
-      LeftMotorSpeed =    MOTOR_MIN_SPEED;
-      RightMotorSpeed =   MOTOR_MIN_SPEED;
+     *rgbLEDsData = *rgbLEDsData | 0b0000000000100; 
 
       // Woah man there's an obstacle
       obstacleDetected =  TRUE;
-
-      // PIVOT_REQUIRED is used just so we give the robot a chance to stop before immediately pivoting
-      if (currentPivot == PIVOT_NONE) {
-          currentPivot = PIVOT_REQUIRED;
-      } else if (currentPivot == PIVOT_REQUIRED) {
-          currentPivot = PIVOT_LEFT; // pivot left by default. this will get changed in taskPivot if needed
-      }
   }
 
-  // If our pivot manuever is complete/no more obstacle, resume robot at full speed
-  if (hasBeenPivoting && !obstacleDetected) {
-      currentPivot =    PIVOT_NONE;
-      LeftMotorSpeed =  MOTOR_MAX_SPEED;
-      RightMotorSpeed = MOTOR_MAX_SPEED;
-  }
-}
+  // else if (distance1 < SONAR_THRESHOLD_VALUE) {
+  //     LeftMotorSpeed =    MOTOR_MIN_SPEED;
+  //     RightMotorSpeed =   MOTOR_MIN_SPEED;
 
-// Pivot and avoid obstacle
-void taskPivot() {
-
-  /// NOTE: Between this task and taskIR, taskIR is essentially ignored until taskSonar determines there is no longer an obstacle
-  /// We don't care about the line if there's an obstacle -- as long as the robot pivots in the direction of the line, it should be fine
-
-  /// NOTE: There is a possibly issue I forsee with this task and taskIR, if the robot fully loses the line it will spin forever
-  /// Depending on testing we may need/may need not to add a failsafe/check for this. But for now it should be fine to let it be.
-
-  // Exit this task early if we are on PIVOT_REQUIRED to allow our robot to stop (speed = MOTOR_MIN_SPEED) before making any pivots
-  if (currentPivot == PIVOT_REQUIRED) {
-      return;
-  }
-
-  // Set both motors at 45%
-  LeftMotorSpeed =  MOTOR_TURN_SPEED;
-  RightMotorSpeed = MOTOR_TURN_SPEED;
-
-  // Set pivot direction based on current direction robot is veering towards (robot always is veering away from line)
-  if (currentDirection == DIRECTION_LEFT) {
-      currentPivot = PIVOT_RIGHT;
-  }
-  else if (currentDirection == DIRECTION_RIGHT) {
-      currentPivot = PIVOT_LEFT;
-  }
+  //     // Woah man there's an obstacle
+  //     obstacleDetected =  TRUE;
+  // }
 }
